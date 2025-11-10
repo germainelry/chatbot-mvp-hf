@@ -95,3 +95,15 @@
   background: hsl(var(--muted-foreground) / 0.5);
 }
 
+/* Loading dots animation */
+@keyframes loading-dot {
+  0%, 80%, 100% {
+    transform: scale(0.8);
+    opacity: 0.5;
+  }
+  40% {
+    transform: scale(1.2);
+    opacity: 1;
+  }
+}
+

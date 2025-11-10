@@ -77,6 +77,21 @@ export interface FeedbackHistory {
   created_at: string;
 }
 
+export interface DailyMetrics {
+  date: string;
+  total_conversations: number;
+  resolved_conversations: number;
+  escalated_conversations: number;
+  avg_confidence_score: number;
+  helpful_feedback: number;
+  not_helpful_feedback: number;
+  needs_improvement_feedback: number;
+}
+
+export interface TimeSeriesResponse {
+  metrics: DailyMetrics[];
+}
+
 // API Functions
 
 // Conversations
@@ -190,6 +205,11 @@ export const getMetrics = async (): Promise<Metrics> => {
 
 export const getFeedbackHistory = async (): Promise<FeedbackHistory[]> => {
   const response = await api.get('/analytics/feedback-history');
+  return response.data;
+};
+
+export const getTimeSeriesMetrics = async (days: number = 30): Promise<TimeSeriesResponse> => {
+  const response = await api.get('/analytics/time-series', { params: { days } });
   return response.data;
 };
 

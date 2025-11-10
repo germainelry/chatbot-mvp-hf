@@ -12,7 +12,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../co
 import { Badge } from '../components/ui/badge';
 import { ScrollArea } from '../components/ui/scroll-area';
 import { Separator } from '../components/ui/separator';
-import { Skeleton } from '../components/ui/skeleton';
 import { Avatar, AvatarFallback } from '../components/ui/avatar';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from '../components/ui/sheet';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip';
@@ -169,9 +168,9 @@ export default function CustomerChat() {
         {/* Header */}
         <CardHeader>
           <div className="flex items-center justify-between">
-            <div>
-              <CardTitle>Customer Support Chat</CardTitle>
-              <CardDescription>
+            <div className="py-2 px-2">
+              <CardTitle className="pb-1">Customer Support Chat</CardTitle>
+              <CardDescription className="pt-1">
                 We're here to help!
               </CardDescription>
             </div>
@@ -257,8 +256,7 @@ export default function CustomerChat() {
                   <TooltipTrigger asChild>
                     <Button 
                       variant="ghost" 
-                      size="icon" 
-                      className="text-primary-foreground hover:bg-primary-foreground/20"
+                      size="icon"
                       onClick={startNewConversation}
                     >
                       <Plus className="h-5 w-5" />
@@ -359,11 +357,29 @@ export default function CustomerChat() {
                     </AvatarFallback>
                   </Avatar>
                   <div className="flex flex-col gap-1 max-w-[70%]">
-                    <div className="rounded-lg px-4 py-2 bg-muted shadow-sm">
-                      <div className="flex gap-1">
-                        <Skeleton className="h-2 w-2 rounded-full" />
-                        <Skeleton className="h-2 w-2 rounded-full" style={{ animationDelay: '0.1s' }} />
-                        <Skeleton className="h-2 w-2 rounded-full" style={{ animationDelay: '0.2s' }} />
+                    <div className="rounded-lg px-4 py-2.5 bg-muted shadow-sm">
+                      <div className="flex gap-1.5 items-center">
+                        <div 
+                          className="h-2.5 w-2.5 rounded-full bg-foreground/80" 
+                          style={{ 
+                            animation: 'loading-dot 1.4s ease-in-out infinite',
+                            animationDelay: '0ms'
+                          }} 
+                        />
+                        <div 
+                          className="h-2.5 w-2.5 rounded-full bg-foreground/80" 
+                          style={{ 
+                            animation: 'loading-dot 1.4s ease-in-out infinite',
+                            animationDelay: '200ms'
+                          }} 
+                        />
+                        <div 
+                          className="h-2.5 w-2.5 rounded-full bg-foreground/80" 
+                          style={{ 
+                            animation: 'loading-dot 1.4s ease-in-out infinite',
+                            animationDelay: '400ms'
+                          }} 
+                        />
                       </div>
                     </div>
                   </div>

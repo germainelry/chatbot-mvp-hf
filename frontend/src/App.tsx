@@ -23,7 +23,7 @@ function Navigation() {
       <div className="container flex h-16 items-center px-4">
         <div className="mr-4 flex items-center space-x-2">
           <MessageSquare className="h-6 w-6 text-primary" />
-          <span className="text-xl font-bold">AI Support Assistant</span>
+          <span className="text-xl font-bold">AI Chatbot Assistant</span>
         </div>
         <Separator orientation="vertical" className="h-6 mx-4" />
         <div className="flex flex-1 items-center space-x-2">
