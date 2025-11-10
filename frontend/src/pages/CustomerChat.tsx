@@ -236,7 +236,9 @@ export default function CustomerChat() {
             </div>
           )}
 
-          {messages.map((message) => {
+          {messages
+            .filter((message) => message.message_type !== 'ai_draft') // Filter out drafts - customers should never see them
+            .map((message) => {
             const isCustomer = message.message_type === 'customer';
             return (
               <div

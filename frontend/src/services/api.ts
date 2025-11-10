@@ -117,6 +117,19 @@ export const sendMessage = async (data: {
   return response.data;
 };
 
+export const updateMessage = async (
+  messageId: number,
+  data: {
+    content?: string;
+    message_type?: string;
+    confidence_score?: number;
+    original_ai_content?: string;
+  }
+): Promise<Message> => {
+  const response = await api.patch(`/messages/${messageId}`, data);
+  return response.data;
+};
+
 // AI
 export const generateAIResponse = async (
   conversationId: number,

@@ -9,6 +9,7 @@ import {
   getConversations,
   getConversationMessages,
   sendMessage,
+  updateMessage,
   generateAIResponse,
   updateConversation,
   submitFeedback,
@@ -21,6 +22,7 @@ export default function AgentDashboard() {
   const [selectedConvId, setSelectedConvId] = useState<number | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [aiDraft, setAiDraft] = useState<string>('');
+  const [aiDraftId, setAiDraftId] = useState<number | null>(null);
   const [aiConfidence, setAiConfidence] = useState<number>(0);
   const [isEditMode, setIsEditMode] = useState(false);
   const [editedResponse, setEditedResponse] = useState('');
@@ -58,9 +60,11 @@ export default function AgentDashboard() {
       const lastMessage = msgs[msgs.length - 1];
       if (lastMessage && lastMessage.message_type === 'ai_draft') {
         setAiDraft(lastMessage.content);
+        setAiDraftId(lastMessage.id);
         setEditedResponse(lastMessage.content);
         setAiConfidence(lastMessage.confidence_score || 0);
       } else {
+        setAiDraftId(null);
         // Check if we need to generate an AI response for the last customer message
         const lastCustomerMsg = msgs.filter(m => m.message_type === 'customer').pop();
         const hasResponse = msgs.some(m => 
@@ -105,16 +109,29 @@ export default function AgentDashboard() {
       const messageType = wasEdited ? 'agent_edited' : 'final';
       const originalContent = wasEdited ? aiDraft : undefined;
 
-      await sendMessage({
-        conversation_id: selectedConvId,
-        content: editedResponse,
-        message_type: messageType,
-        confidence_score: aiConfidence,
-        original_ai_content: originalContent,
-      });
+      // If there's an existing ai_draft, update it instead of creating a new message
+      // This prevents duplicate messages from appearing
+      if (aiDraftId) {
+        await updateMessage(aiDraftId, {
+          content: editedResponse,
+          message_type: messageType,
+          confidence_score: aiConfidence,
+          original_ai_content: originalContent,
+        });
+      } else {
+        // Fallback: create new message if no draft exists (shouldn't happen normally)
+        await sendMessage({
+          conversation_id: selectedConvId,
+          content: editedResponse,
+          message_type: messageType,
+          confidence_score: aiConfidence,
+          original_ai_content: originalContent,
+        });
+      }
 
       // Clear draft
       setAiDraft('');
+      setAiDraftId(null);
       setEditedResponse('');
       setIsEditMode(false);
       setShowFeedback(true);
@@ -131,6 +148,7 @@ export default function AgentDashboard() {
     try {
       await updateConversation(selectedConvId, 'escalated');
       setAiDraft('');
+      setAiDraftId(null);
       setEditedResponse('');
       loadConversations();
       loadMessages(selectedConvId);
