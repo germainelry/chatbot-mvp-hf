@@ -1,0 +1,23 @@
+{
+  "name": "mvp-chatbot",
+  "version": "1.0.0",
+  "description": "A full-stack AI-powered customer support system with **Human-in-the-Loop (HITL)** capabilities, powered by Ollama's Llama 3.2 LLM model. This MVP demonstrates modern agentic AI systems, prompt engineering, and product metrics for AI applications.",
+  "main": "index.js",
+  "scripts": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/germainelry/mvp-chatbot.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/germainelry/mvp-chatbot/issues"
+  },
+  "homepage": "https://github.com/germainelry/mvp-chatbot#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.56.1",
+    "@types/node": "^24.10.0"
+  }
+}
