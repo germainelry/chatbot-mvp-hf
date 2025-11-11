@@ -11,6 +11,7 @@ from datetime import datetime
 from app.database import get_db
 from app.models import Feedback, FeedbackRating, Conversation, Message, TrainingData
 from app.services.evaluation_service import evaluate_ai_response, save_evaluation_metrics
+from app.services.data_logging_service import log_agent_action
 
 router = APIRouter()
 
@@ -70,9 +71,12 @@ async def create_feedback(
     if feedback.agent_correction and feedback.message_id:
         message = db.query(Message).filter(Message.id == feedback.message_id).first()
         if message:
+            # Use original AI content if available (for edited messages), otherwise use current content
+            ai_response_content = message.original_ai_content if message.original_ai_content else message.content
+            
             # Evaluate AI response against agent correction
             eval_metrics = evaluate_ai_response(
-                ai_response=message.content,
+                ai_response=ai_response_content,
                 agent_correction=feedback.agent_correction
             )
             
@@ -92,13 +96,37 @@ async def create_feedback(
                     feedback_id=db_feedback.id,
                     conversation_id=feedback.conversation_id,
                     message_id=feedback.message_id,
-                    original_ai_response=message.content,
+                    original_ai_response=ai_response_content,
                     agent_correction=feedback.agent_correction,
                     intent=message.intent,
                     processed=0
                 )
                 db.add(training_data)
                 db.commit()
+    
+    # Automatically log agent action based on feedback rating
+    action_type_map = {
+        FeedbackRating.HELPFUL: 'approve',
+        FeedbackRating.NOT_HELPFUL: 'reject',
+        FeedbackRating.NEEDS_IMPROVEMENT: 'edit' if feedback.agent_correction else None
+    }
+    
+    action_type = action_type_map.get(feedback.rating)
+    if action_type:
+        try:
+            log_agent_action(
+                action_type=action_type,
+                conversation_id=feedback.conversation_id,
+                message_id=feedback.message_id,
+                action_data={
+                    'rating': feedback.rating.value,
+                    'has_correction': bool(feedback.agent_correction)
+                },
+                db=db
+            )
+        except Exception as e:
+            # Don't fail feedback submission if action logging fails
+            print(f"Failed to auto-log agent action: {e}")
     
     return db_feedback
 
