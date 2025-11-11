@@ -92,6 +92,22 @@ export interface TimeSeriesResponse {
   metrics: DailyMetrics[];
 }
 
+export interface EvaluationMetrics {
+  avg_bleu_score: number | null;
+  avg_semantic_similarity: number | null;
+  avg_csat: number | null;
+  deflection_rate: number;
+  total_evaluations: number;
+  total_csat_responses: number;
+}
+
+export interface AgentPerformance {
+  total_actions: number;
+  approval_rate: number;
+  correction_frequency: number;
+  action_breakdown: Record<string, number>;
+}
+
 // API Functions
 
 // Conversations
@@ -110,8 +126,11 @@ export const getConversation = async (id: number): Promise<Conversation> => {
   return response.data;
 };
 
-export const updateConversation = async (id: number, status: string): Promise<Conversation> => {
-  const response = await api.patch(`/conversations/${id}`, { status });
+export const updateConversation = async (id: number, status: string, csat_score?: number | null): Promise<Conversation> => {
+  const response = await api.patch(`/conversations/${id}`, { 
+    status,
+    ...(csat_score !== undefined && csat_score !== null && { csat_score })
+  });
   return response.data;
 };
 
@@ -210,6 +229,26 @@ export const getFeedbackHistory = async (): Promise<FeedbackHistory[]> => {
 
 export const getTimeSeriesMetrics = async (days: number = 30): Promise<TimeSeriesResponse> => {
   const response = await api.get('/analytics/time-series', { params: { days } });
+  return response.data;
+};
+
+export const getEvaluationMetrics = async (days: number = 30): Promise<EvaluationMetrics> => {
+  const response = await api.get('/analytics/evaluation', { params: { days } });
+  return response.data;
+};
+
+export const getAgentPerformance = async (days: number = 30): Promise<AgentPerformance> => {
+  const response = await api.get('/analytics/agent-performance', { params: { days } });
+  return response.data;
+};
+
+export const logAgentAction = async (data: {
+  action_type: string;
+  conversation_id?: number;
+  message_id?: number;
+  action_data?: Record<string, any>;
+}): Promise<any> => {
+  const response = await api.post('/agent-actions', data);
   return response.data;
 };
 

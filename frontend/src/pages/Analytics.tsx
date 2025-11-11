@@ -17,15 +17,26 @@ import {
   Target,
   Zap,
   ArrowUpRight,
-  ArrowDownRight
+  ArrowDownRight,
+  Award,
+  Brain,
+  Star,
+  FileText,
+  UserCheck,
+  Edit,
+  Shield
 } from 'lucide-react';
 import { 
   getMetrics, 
   getFeedbackHistory, 
   getTimeSeriesMetrics,
+  getEvaluationMetrics,
+  getAgentPerformance,
   Metrics, 
   FeedbackHistory,
-  TimeSeriesResponse
+  TimeSeriesResponse,
+  EvaluationMetrics,
+  AgentPerformance
 } from '../services/api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -37,11 +48,14 @@ import { StatusDistributionChart } from '../components/analytics/StatusDistribut
 import { ConfidenceDistributionChart } from '../components/analytics/ConfidenceDistributionChart';
 import { FeedbackBreakdownChart } from '../components/analytics/FeedbackBreakdownChart';
 import { RateTrendsChart } from '../components/analytics/RateTrendsChart';
+import { ActionBreakdownChart } from '../components/analytics/ActionBreakdownChart';
 
 export default function Analytics() {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [feedbackHistory, setFeedbackHistory] = useState<FeedbackHistory[]>([]);
   const [timeSeriesData, setTimeSeriesData] = useState<TimeSeriesResponse | null>(null);
+  const [evaluationMetrics, setEvaluationMetrics] = useState<EvaluationMetrics | null>(null);
+  const [agentPerformance, setAgentPerformance] = useState<AgentPerformance | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -52,14 +66,18 @@ export default function Analytics() {
 
   const loadData = async () => {
     try {
-      const [metricsData, feedbackData, timeSeries] = await Promise.all([
+      const [metricsData, feedbackData, timeSeries, evaluationData, agentData] = await Promise.all([
         getMetrics(),
         getFeedbackHistory(),
         getTimeSeriesMetrics(30),
+        getEvaluationMetrics(30),
+        getAgentPerformance(30),
       ]);
       setMetrics(metricsData);
       setFeedbackHistory(feedbackData);
       setTimeSeriesData(timeSeries);
+      setEvaluationMetrics(evaluationData);
+      setAgentPerformance(agentData);
     } catch (error) {
       console.error('Failed to load analytics:', error);
     } finally {
@@ -216,6 +234,126 @@ export default function Analytics() {
       )}
 
       <FeedbackBreakdownChart metrics={metrics} />
+
+      {/* Evaluation Metrics Section */}
+      {evaluationMetrics && (
+        <>
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-2xl font-bold tracking-tight">Evaluation Metrics</h2>
+              <p className="text-muted-foreground">
+                AI response quality metrics including BLEU scores, semantic similarity, and customer satisfaction
+              </p>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+              <MetricCard
+                title="BLEU Score"
+                value={evaluationMetrics.avg_bleu_score !== null 
+                  ? `${(evaluationMetrics.avg_bleu_score * 100).toFixed(1)}%` 
+                  : 'N/A'}
+                icon={Brain}
+                iconBg="bg-indigo-500"
+                subtitle={evaluationMetrics.total_evaluations > 0 
+                  ? `${evaluationMetrics.total_evaluations} evaluations` 
+                  : 'No data'}
+              />
+              
+              <MetricCard
+                title="Semantic Similarity"
+                value={evaluationMetrics.avg_semantic_similarity !== null 
+                  ? `${(evaluationMetrics.avg_semantic_similarity * 100).toFixed(1)}%` 
+                  : 'N/A'}
+                icon={Award}
+                iconBg="bg-cyan-500"
+                subtitle={evaluationMetrics.total_evaluations > 0 
+                  ? `${evaluationMetrics.total_evaluations} evaluations` 
+                  : 'No data'}
+              />
+              
+              <MetricCard
+                title="CSAT Score"
+                value={evaluationMetrics.avg_csat !== null 
+                  ? `${evaluationMetrics.avg_csat.toFixed(1)}/5` 
+                  : 'N/A'}
+                icon={Star}
+                iconBg="bg-yellow-500"
+                subtitle={evaluationMetrics.total_csat_responses > 0 
+                  ? `${evaluationMetrics.total_csat_responses} responses` 
+                  : 'No data'}
+              />
+              
+              <MetricCard
+                title="Total Evaluations"
+                value={evaluationMetrics.total_evaluations}
+                icon={FileText}
+                iconBg="bg-slate-500"
+                subtitle="Last 30 days"
+              />
+              
+              <MetricCard
+                title="CSAT Responses"
+                value={evaluationMetrics.total_csat_responses}
+                icon={ThumbsUp}
+                iconBg="bg-pink-500"
+                subtitle="Last 30 days"
+              />
+              
+              <MetricCard
+                title="Deflection Rate"
+                value={`${evaluationMetrics.deflection_rate.toFixed(1)}%`}
+                icon={Target}
+                iconBg="bg-emerald-500"
+                subtitle="AI handled"
+              />
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Agent Performance Section */}
+      {agentPerformance && (
+        <>
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-2xl font-bold tracking-tight">Agent Performance</h2>
+              <p className="text-muted-foreground">
+                Metrics on how agents interact with and approve AI responses
+              </p>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              <MetricCard
+                title="Approval Rate"
+                value={`${agentPerformance.approval_rate.toFixed(1)}%`}
+                icon={UserCheck}
+                iconBg="bg-green-500"
+                subtitle={`${agentPerformance.total_actions} total actions`}
+                trend="up"
+              />
+              
+              <MetricCard
+                title="Correction Frequency"
+                value={agentPerformance.correction_frequency}
+                icon={Edit}
+                iconBg="bg-orange-500"
+                subtitle="Corrections made"
+              />
+              
+              <MetricCard
+                title="Total Actions"
+                value={agentPerformance.total_actions}
+                icon={Shield}
+                iconBg="bg-blue-500"
+                subtitle="Last 30 days"
+              />
+            </div>
+            
+            {/* Action Breakdown Chart */}
+            {agentPerformance && agentPerformance.total_actions > 0 && (
+              <ActionBreakdownChart agentPerformance={agentPerformance} />
+            )}
+          </div>
+        </>
+      )}
 
       {/* Key Insights */}
       <Card>

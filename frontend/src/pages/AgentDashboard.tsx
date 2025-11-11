@@ -13,6 +13,7 @@ import {
   generateAIResponse,
   updateConversation,
   submitFeedback,
+  logAgentAction,
   Conversation,
   Message,
 } from '../services/api';
@@ -40,6 +41,11 @@ export default function AgentDashboard() {
   const [showFeedback, setShowFeedback] = useState(false);
   const [feedbackRating, setFeedbackRating] = useState<string>('');
   const [feedbackNotes, setFeedbackNotes] = useState('');
+  const [finalMessageId, setFinalMessageId] = useState<number | null>(null);
+  const [agentCorrection, setAgentCorrection] = useState('');
+  const [csatScore, setCsatScore] = useState<number | null>(null);
+  const [wasResponseEdited, setWasResponseEdited] = useState(false);
+  const [finalResponseContent, setFinalResponseContent] = useState('');
 
   useEffect(() => {
     loadConversations();
@@ -122,22 +128,46 @@ export default function AgentDashboard() {
 
       // If there's an existing ai_draft, update it instead of creating a new message
       // This prevents duplicate messages from appearing
+      let messageId: number | null = null;
       if (aiDraftId) {
-        await updateMessage(aiDraftId, {
+        const updatedMessage = await updateMessage(aiDraftId, {
           content: editedResponse,
           message_type: messageType,
           confidence_score: aiConfidence,
           original_ai_content: originalContent,
         });
+        messageId = updatedMessage.id;
       } else {
         // Fallback: create new message if no draft exists (shouldn't happen normally)
-        await sendMessage({
+        const newMessage = await sendMessage({
           conversation_id: selectedConvId,
           content: editedResponse,
           message_type: messageType,
           confidence_score: aiConfidence,
           original_ai_content: originalContent,
         });
+        messageId = newMessage.id;
+      }
+
+      // Store message ID, editing state, and final content for feedback submission
+      setFinalMessageId(messageId);
+      setWasResponseEdited(wasEdited);
+      setFinalResponseContent(editedResponse); // Store final response before clearing
+
+      // Log agent action
+      try {
+        await logAgentAction({
+          action_type: wasEdited ? 'edit' : 'approve',
+          conversation_id: selectedConvId,
+          message_id: messageId,
+          action_data: {
+            was_edited: wasEdited,
+            confidence_score: aiConfidence
+          }
+        });
+      } catch (error) {
+        console.error('Failed to log agent action:', error);
+        // Don't block the flow if logging fails
       }
 
       // Clear draft
@@ -158,6 +188,18 @@ export default function AgentDashboard() {
 
     try {
       await updateConversation(selectedConvId, 'escalated');
+      
+      // Log escalate action
+      try {
+        await logAgentAction({
+          action_type: 'escalate',
+          conversation_id: selectedConvId,
+          message_id: aiDraftId || null,
+        });
+      } catch (error) {
+        console.error('Failed to log escalate action:', error);
+      }
+      
       setAiDraft('');
       setAiDraftId(null);
       setEditedResponse('');
@@ -168,13 +210,14 @@ export default function AgentDashboard() {
     }
   };
 
-  const handleResolve = async () => {
+  const handleResolve = async (csat?: number | null) => {
     if (!selectedConvId) return;
 
     try {
-      await updateConversation(selectedConvId, 'resolved');
+      await updateConversation(selectedConvId, 'resolved', csat || csatScore);
       loadConversations();
       setShowFeedback(false);
+      setCsatScore(null);
     } catch (error) {
       console.error('Failed to resolve:', error);
     }
@@ -184,17 +227,42 @@ export default function AgentDashboard() {
     if (!selectedConvId || !feedbackRating) return;
 
     try {
+      // Use agent_correction from form if provided, otherwise use final response if it was edited
+      const correction = agentCorrection || (wasResponseEdited ? finalResponseContent : undefined);
+      
       await submitFeedback({
         conversation_id: selectedConvId,
+        message_id: finalMessageId || undefined,
         rating: feedbackRating,
-        agent_correction: editedResponse !== aiDraft ? editedResponse : undefined,
+        agent_correction: correction,
         notes: feedbackNotes,
       });
+
+      // Log reject action if feedback is negative
+      if (feedbackRating === 'not_helpful') {
+        try {
+          await logAgentAction({
+            action_type: 'reject',
+            conversation_id: selectedConvId,
+            message_id: finalMessageId || undefined,
+            action_data: {
+              rating: feedbackRating,
+              has_correction: !!correction
+            }
+          });
+        } catch (error) {
+          console.error('Failed to log reject action:', error);
+        }
+      }
 
       setShowFeedback(false);
       setFeedbackRating('');
       setFeedbackNotes('');
-      handleResolve();
+      setAgentCorrection('');
+      setFinalMessageId(null);
+      setWasResponseEdited(false);
+      setFinalResponseContent('');
+      handleResolve(csatScore);
     } catch (error) {
       console.error('Failed to submit feedback:', error);
     }
@@ -503,6 +571,20 @@ export default function AgentDashboard() {
                     </div>
                   </div>
                   <div>
+                    <Label htmlFor="agent-correction">Agent Correction (optional)</Label>
+                    <Textarea
+                      id="agent-correction"
+                      value={agentCorrection}
+                      onChange={(e) => setAgentCorrection(e.target.value)}
+                      rows={3}
+                      placeholder="What would you have said instead? (This helps calculate BLEU and semantic similarity)"
+                      className="mt-2"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Provide your version of the response to help evaluate AI quality
+                    </p>
+                  </div>
+                  <div>
                     <Label htmlFor="notes">Additional Notes (optional)</Label>
                     <Textarea
                       id="notes"
@@ -513,13 +595,34 @@ export default function AgentDashboard() {
                       className="mt-2"
                     />
                   </div>
+                  <div>
+                    <Label htmlFor="csat">Customer Satisfaction (CSAT) Score</Label>
+                    <div className="flex gap-2 mt-2">
+                      {[1, 2, 3, 4, 5].map((score) => (
+                        <Button
+                          key={score}
+                          type="button"
+                          variant={csatScore === score ? 'default' : 'outline'}
+                          onClick={() => setCsatScore(score)}
+                          className={cn(
+                            csatScore === score && 'bg-yellow-500 hover:bg-yellow-600'
+                          )}
+                        >
+                          {score}
+                        </Button>
+                      ))}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Rate customer satisfaction (1-5 scale)
+                    </p>
+                  </div>
                 </div>
                 <DialogFooter>
                   <Button
                     variant="outline"
                     onClick={() => {
                       setShowFeedback(false);
-                      handleResolve();
+                      handleResolve(csatScore);
                     }}
                   >
                     Skip
