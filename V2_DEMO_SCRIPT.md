@@ -25,10 +25,6 @@ This demo showcases the evolution from MVP to V2 multi-agent AI assistant platfo
    - Explain: "Embeddings are automatically generated and stored in ChromaDB"
    - Show the embedding field (JSON array) in the database
 
-**Key Talking Points:**
-- "Vector RAG enables semantic understanding, not just keyword matching"
-- "This is production-grade retrieval, similar to what Shopee uses"
-
 ---
 
 ## Part 2: Multi-Agent Orchestration (5 min)

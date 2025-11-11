@@ -98,9 +98,18 @@ Restart backend
 
 ## Current System Overview
 
-### What You Built: RAG-Based System
+### What You Built: Vector RAG-Based System (V2)
 
-Your AI Customer Support Assistant uses **Retrieval-Augmented Generation (RAG)** to provide contextual responses without training the model.
+Your AI Customer Support Assistant uses **Vector Retrieval-Augmented Generation (RAG)** with semantic search to provide contextual responses without training the model.
+
+**V2 Implementation:**
+- ✅ **Vector Embeddings**: Uses `sentence-transformers` (all-MiniLM-L6-v2) to generate 384-dimensional embeddings
+- ✅ **Vector Database**: ChromaDB with persistent storage in `backend/chroma_db/` directory
+- ✅ **Automatic Embedding**: Knowledge base articles are automatically embedded when created/updated via API
+- ✅ **Semantic Search**: Queries are matched by meaning using cosine similarity, not just keywords
+- ✅ **Fallback Mechanism**: Gracefully falls back to keyword search if embeddings unavailable
+- ✅ **Dual Storage**: Embeddings stored in both ChromaDB (for fast search) and SQLite (for backup)
+- ✅ **Lazy Loading**: Embedding model loaded only when first needed (singleton pattern)
 
 **Your Knowledge Base (from `seed_data.py`):**
 ```python
@@ -121,7 +130,7 @@ articles = [
 ]
 ```
 
-**Key Point:** These articles are **NOT built into Llama 3.2**. They're stored in your SQLite database and retrieved on-demand.
+**Key Point:** These articles are **NOT built into Llama 3.2**. They're stored in your SQLite database, embedded in ChromaDB, and retrieved on-demand using semantic similarity search.
 
 ---
 
@@ -135,94 +144,166 @@ articles = [
 2. **Augmented**: Add that information to the prompt
 3. **Generation**: LLM generates response using the context
 
-### Your RAG Implementation
+### Your V2 RAG Implementation
 
-**File: `backend/app/services/llm_service.py`**
+**File: `backend/app/services/rag_service.py`** (Vector RAG Service)
+
+The V2 implementation uses a singleton pattern with lazy loading and automatic fallback:
 
 ```python
-async def generate_ai_response(conversation_id: int, user_message: str, db: Session):
+# Lazy-loaded singleton pattern
+_embedding_model = None
+_chroma_client = None
+_chroma_collection = None
+
+EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"  # 384 dimensions
+
+def get_embedding_model():
+    """Lazy load the embedding model."""
+    global _embedding_model
+    if _embedding_model is None:
+        from sentence_transformers import SentenceTransformer
+        _embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+    return _embedding_model
+
+def get_chroma_collection():
+    """Initialize and return ChromaDB collection (persistent storage)."""
+    global _chroma_client, _chroma_collection
+    if _chroma_client is None:
+        import chromadb
+        from chromadb.config import Settings
+        chroma_path = os.path.join("backend", "chroma_db")
+        _chroma_client = chromadb.PersistentClient(
+            path=chroma_path,
+            settings=Settings(anonymized_telemetry=False)
+        )
+    
+    if _chroma_collection is None:
+        try:
+            _chroma_collection = _chroma_client.get_collection("knowledge_base")
+        except:
+            _chroma_collection = _chroma_client.create_collection(
+                name="knowledge_base",
+                metadata={"hnsw:space": "cosine"}
+            )
+    return _chroma_collection
+
+def generate_embedding(text: str) -> List[float]:
+    """Generate vector embedding for text."""
+    model = get_embedding_model()
+    embedding = model.encode(text, normalize_embeddings=True)
+    return embedding.tolist()
+
+def search_knowledge_base_vector(query: str, db: Session, top_k: int = 3) -> List[Dict]:
     """
-    Generate AI response using Ollama or fallback logic.
+    Search knowledge base using vector similarity (V2).
+    Falls back to keyword search if embeddings unavailable.
     """
+    collection = get_chroma_collection()
+    query_embedding = generate_embedding(query)
     
-    # STEP 1: RETRIEVAL - Search knowledge base
-    matched_articles = search_knowledge_base(user_message, db)
+    # Search in ChromaDB
+    results = collection.query(
+        query_embeddings=[query_embedding],
+        n_results=top_k
+    )
     
-    # STEP 2: Build context from retrieved articles
-    context = ""
-    if matched_articles:
-        context = "Relevant information:\n\n"
-        for article in matched_articles[:2]:  # Top 2 matches
-            context += f"**{article['title']}**\n{article['content'][:300]}...\n\n"
+    # Map results to article format with similarity scores
+    matched_articles = []
+    if results['ids'] and len(results['ids'][0]) > 0:
+        from app.models import KnowledgeBase
+        for i, article_id in enumerate(results['ids'][0]):
+            article = db.query(KnowledgeBase).filter_by(id=int(article_id)).first()
+            if article:
+                distance = results['distances'][0][i]
+                similarity = 1.0 - distance  # Convert distance to similarity (0-1)
+                
+                matched_articles.append({
+                    "id": article.id,
+                    "title": article.title,
+                    "content": article.content,
+                    "category": article.category,
+                    "similarity": similarity,
+                    "match_score": similarity
+                })
     
-    # STEP 3: AUGMENTED - Inject context into prompt
-    prompt = f"""You are a helpful customer support assistant. 
-    Use the following information to answer:
+    # Fallback to keyword search if no vector results
+    if not matched_articles:
+        return search_knowledge_base_keyword(query, db, top_k)
     
-    {context}
+    return matched_articles
+
+def add_article_to_vector_db(article_id: int, title: str, content: str, db: Session):
+    """Add or update article in vector database (called automatically on create/update)."""
+    collection = get_chroma_collection()
+    article_text = f"{title} {content}"
+    embedding = generate_embedding(article_text)
     
-    Customer Question: {user_message}
+    # Add to ChromaDB
+    collection.upsert(
+        ids=[str(article_id)],
+        embeddings=[embedding],
+        documents=[article_text],
+        metadatas=[{"article_id": article_id, "title": title}]
+    )
     
-    Provide a helpful, concise response."""
-    
-    # STEP 4: GENERATION - LLM generates response
-    response = await generate_ollama_response(user_message, context)
-    
-    return {
-        "response": response,
-        "confidence_score": confidence,
-        "matched_articles": matched_articles
-    }
+    # Also store embedding in SQLite for backup
+    from app.models import KnowledgeBase
+    article = db.query(KnowledgeBase).filter_by(id=article_id).first()
+    if article:
+        article.embedding = embedding
+        db.commit()
+
+def initialize_vector_db(db: Session):
+    """Initialize vector database with existing knowledge base articles (called on startup)."""
+    from app.models import KnowledgeBase
+    articles = db.query(KnowledgeBase).all()
+    for article in articles:
+        add_article_to_vector_db(article.id, article.title, article.content, db)
 ```
 
-### How Your Retrieval Works
-
-**File: `backend/app/services/llm_service.py`**
+**File: `backend/app/services/llm_service.py`** (Uses Vector RAG)
 
 ```python
 def search_knowledge_base(query: str, db: Session) -> List[Dict]:
-    """Simple keyword-based knowledge base search."""
-    query_lower = query.lower()
-    
-    # Get all articles from database
-    all_articles = db.query(KnowledgeBase).all()
-    
-    matched_articles = []
-    for article in all_articles:
-        # Combine searchable fields
-        article_text = f"{article.title} {article.content} {article.tags}".lower()
-        
-        # Count keyword matches
-        query_words = set(query_lower.split())
-        article_words = set(article_text.split())
-        common_words = query_words.intersection(article_words)
-        
-        if common_words:
-            # Calculate match score
-            match_score = len(common_words) / len(query_words)
-            matched_articles.append({
-                "id": article.id,
-                "title": article.title,
-                "content": article.content,
-                "match_score": match_score
-            })
-    
-    # Sort by relevance
-    matched_articles.sort(key=lambda x: x["match_score"], reverse=True)
-    return matched_articles[:3]  # Top 3
+    """Search knowledge base - uses vector RAG (V2)."""
+    from app.services.rag_service import search_knowledge_base_vector
+    return search_knowledge_base_vector(query, db, top_k=3)
 ```
 
-**Current Method:** Keyword matching (simple but works)
+**File: `backend/app/routers/knowledge_base.py`** (Automatic Embedding)
+
+```python
+@router.post("")
+async def create_article(article: KnowledgeBaseCreate, db: Session = Depends(get_db)):
+    """Create a new knowledge base article."""
+    db_article = KnowledgeBase(...)
+    db.add(db_article)
+    db.commit()
+    db.refresh(db_article)
+    
+    # Automatically generate and store embedding
+    from app.services.rag_service import add_article_to_vector_db
+    add_article_to_vector_db(db_article.id, db_article.title, db_article.content, db)
+    
+    return db_article
+```
+
+### How Your V2 Retrieval Works
+
+**Current Method:** Vector semantic search using embeddings (V2 - Implemented ✅)
 
 **Example Flow:**
 ```
-User asks: "What's your return policy?"
+User asks: "How do I get my money back?"
     ↓
-Query words: ["what's", "your", "return", "policy"]
+Generate query embedding: [0.23, -0.45, 0.12, ...] (384 dimensions)
     ↓
-Search articles for matching words
+Search ChromaDB vector database for similar embeddings
     ↓
-Article "Return & Refund Policy" has: ["return", "policy"] = 50% match
+Article "Return & Refund Policy" has high semantic similarity (0.87)
+    ↓
+Even though query doesn't contain "return" or "refund"!
     ↓
 Inject article content into prompt
     ↓
@@ -230,6 +311,12 @@ Llama 3.2 generates response using the context
     ↓
 Return: "Our return policy allows returns within 30 days..."
 ```
+
+**Key Advantages of Vector RAG (V2):**
+- ✅ **Semantic Understanding**: "get money back" matches "refund policy" (not just keyword matching)
+- ✅ **Better Relevance**: Similarity scores (0-1) provide better ranking than keyword counts
+- ✅ **Automatic Embedding**: New articles are embedded automatically when created/updated
+- ✅ **Fallback Support**: Falls back to keyword search if embeddings unavailable
 
 ---
 
@@ -261,75 +348,63 @@ There are **4 main ways** to give an LLM knowledge:
 - **Requires retrieval step** - Adds latency (~100ms)
 - **Quality depends on retrieval** - Bad search = bad response
 
-### 📈 Improving Your RAG System
+### 📈 Improving Your RAG System (V2 Current State)
 
-#### **Upgrade 1: Semantic Search (Replace Keywords)**
+#### **✅ Upgrade 1: Semantic Search (V2 - Already Implemented)**
 
-**Current (Keywords):**
-```python
-# Matches exact words: "return" matches "return" but not "refund"
-query_words = set(query_lower.split())
-article_words = set(article_text.split())
-common_words = query_words.intersection(article_words)
+**V2 Implementation (Current):**
+
+The actual implementation uses:
+- **Singleton pattern** with lazy loading for the embedding model
+- **Persistent ChromaDB storage** in `backend/chroma_db/` directory
+- **Automatic fallback** to keyword search if embeddings unavailable
+- **Automatic embedding** when articles are created/updated via API
+- **Dual storage**: Embeddings stored in both ChromaDB (for fast search) and SQLite (for backup)
+
+**Key Features:**
+1. **Lazy Loading**: Embedding model only loaded when first needed
+2. **Persistent Storage**: ChromaDB data persists across restarts
+3. **Error Handling**: Graceful fallback to keyword search if vector search fails
+4. **Automatic Embedding**: `add_article_to_vector_db()` called automatically in `knowledge_base.py` router
+5. **Initialization**: `initialize_vector_db()` can be called on startup to embed existing articles
+
+**Architecture:**
+```
+User Query
+    ↓
+search_knowledge_base_vector()
+    ↓
+generate_embedding() → [0.23, -0.45, ...] (384 dims)
+    ↓
+ChromaDB.query() → Find similar embeddings
+    ↓
+Map results to KnowledgeBase articles
+    ↓
+Return articles with similarity scores (0-1)
 ```
 
-**Better (Semantic Search):**
-```python
-# Install
-pip install sentence-transformers chromadb
+**Storage Locations:**
+- ChromaDB: `backend/chroma_db/` (vector database)
+- SQLite: `backend/chatbot.db` (embeddings stored in `KnowledgeBase.embedding` JSON column)
 
-# Create embeddings
-from sentence_transformers import SentenceTransformer
-import chromadb
+**Why This is Better:**
+- ✅ "return policy" matches "refund guidelines" (semantic similarity)
+- ✅ "shipping info" matches "delivery details"
+- ✅ "password reset" matches "login problems"
+- ✅ Similarity scores (0-1) provide better ranking than keyword counts
 
-# Initialize
-embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-chroma_client = chromadb.Client()
-collection = chroma_client.create_collection("knowledge_base")
-
-# Embed all articles once
-def embed_knowledge_base(db):
-    articles = db.query(KnowledgeBase).all()
-    for article in articles:
-        embedding = embedding_model.encode(article.content)
-        collection.add(
-            documents=[article.content],
-            embeddings=[embedding.tolist()],
-            metadatas=[{
-                "title": article.title,
-                "category": article.category,
-                "id": article.id
-            }],
-            ids=[f"article_{article.id}"]
-        )
-
-# Search with semantic similarity
-def search_knowledge_base_semantic(query: str) -> List[Dict]:
-    query_embedding = embedding_model.encode(query)
-    results = collection.query(
-        query_embeddings=[query_embedding.tolist()],
-        n_results=3
-    )
-    return results
-```
-
-**Why Better:**
-- "return policy" matches "refund guidelines" (semantic similarity)
-- "shipping info" matches "delivery details"
-- "password reset" matches "login problems"
-
-**Example:**
+**Example (V2 Current Behavior):**
 ```
 Query: "How do I get my money back?"
     ↓
-Embedding: [0.23, -0.45, 0.12, ...] (768 dimensions)
+Embedding: [0.23, -0.45, 0.12, ...] (384 dimensions)
     ↓
-Semantic search finds: "Return & Refund Policy" (high similarity)
+Semantic search finds: "Return & Refund Policy" (similarity: 0.87)
     ↓
 Even though query doesn't contain "return" or "refund"!
 ```
 
-#### **Upgrade 2: Hybrid Search (Best of Both)**
+#### **🔄 Upgrade 2: Hybrid Search (Future Enhancement)**
 
 ```python
 def search_knowledge_base_hybrid(query: str, db: Session):
@@ -344,10 +419,10 @@ def search_knowledge_base_hybrid(query: str, db: Session):
     return rerank(combined)  # Use cross-encoder for final ranking
 ```
 
-#### **Upgrade 3: Add Metadata Filtering**
+#### **🔄 Upgrade 3: Add Metadata Filtering (Future Enhancement)**
 
 ```python
-# Search only in specific category
+# Future: Search only in specific category
 results = collection.query(
     query_embeddings=[query_embedding],
     n_results=3,
@@ -356,6 +431,8 @@ results = collection.query(
 
 # Your current categories: Returns, Shipping, Account, Products
 ```
+
+**Note:** V2 currently searches across all categories. Category filtering can be added as an enhancement.
 
 ---
 
@@ -896,140 +973,67 @@ Is your knowledge static or dynamic?
 ### For Your V2 System
 
 **Now (V2 - Implemented):**
-- ✅ Vector RAG with semantic search (sentence-transformers + ChromaDB)
-- ✅ Collecting feedback data (TrainingData model)
-- ✅ Retraining pipeline (updates embeddings/intent)
-- ✅ Evaluation metrics (BLEU, semantic similarity, CSAT)
-- ✅ Multi-agent orchestration
+- ✅ **Vector RAG with semantic search** (sentence-transformers + ChromaDB) - **CURRENT**
+- ✅ **Automatic embedding generation** when articles are created/updated
+- ✅ **Collecting feedback data** (TrainingData model)
+- ✅ **Retraining pipeline** (updates embeddings/intent examples)
+- ✅ **Evaluation metrics** (BLEU, semantic similarity, CSAT)
+- ✅ **Multi-agent orchestration** (Router, Knowledge, Escalation agents)
+- ✅ **A/B testing framework** (ModelVersion, Experiment models)
 
 **Next 1-2 months (100+ feedbacks):**
 - 🔄 Create custom Ollama model with Modelfile
 - 🔄 Use best agent responses as training examples
 - 🔄 Improve retraining automation (scheduled triggers)
+- 🔄 Add hybrid search (vector + keyword combination)
 
 **Next 3-6 months (1000+ feedbacks):**
 - 🔄 Fine-tune with LoRA on collected feedback (Phase 3)
 - 🔄 Hybrid: Fine-tuned model + Vector RAG retrieval
 - 🔄 A/B test vs base model (framework already implemented)
 - 🔄 Automated retraining pipeline (scheduled)
+- 🔄 Metadata filtering for category-specific searches
 
 ---
 
 ## Implementation Examples
 
-### Example 1: Add Semantic Search to Your System
+### Example 1: Semantic Search (V2 - Already Implemented ✅)
 
-**Step 1: Install dependencies**
-```bash
-pip install sentence-transformers chromadb
+**Note:** This is already fully implemented in V2! See `backend/app/services/rag_service.py` for the actual code.
+
+**What's Implemented:**
+- ✅ Vector embeddings using `sentence-transformers` (all-MiniLM-L6-v2)
+- ✅ ChromaDB for persistent vector storage
+- ✅ Automatic embedding on article create/update
+- ✅ Semantic search with similarity scoring
+- ✅ Fallback to keyword search if embeddings unavailable
+- ✅ Singleton pattern with lazy loading
+
+**To Use It:**
+```python
+# Already integrated in llm_service.py
+from app.services.rag_service import search_knowledge_base_vector
+
+articles = search_knowledge_base_vector(query, db, top_k=3)
+# Returns articles with similarity scores (0-1)
 ```
 
-**Step 2: Create embedding service**
-
+**To Initialize Existing Articles:**
 ```python
-# File: backend/app/services/embedding_service.py
-
-from sentence_transformers import SentenceTransformer
-import chromadb
-from typing import List, Dict
-
-class EmbeddingService:
-    def __init__(self):
-        self.model = SentenceTransformer('all-MiniLM-L6-v2')
-        self.client = chromadb.Client()
-        self.collection = self.client.get_or_create_collection("knowledge_base")
-    
-    def embed_knowledge_base(self, articles: List[Dict]):
-        """Embed all knowledge base articles."""
-        for article in articles:
-            embedding = self.model.encode(article['content'])
-            self.collection.add(
-                documents=[article['content']],
-                embeddings=[embedding.tolist()],
-                metadatas=[{
-                    "id": article['id'],
-                    "title": article['title'],
-                    "category": article['category']
-                }],
-                ids=[f"article_{article['id']}"]
-            )
-    
-    def search(self, query: str, n_results: int = 3) -> List[Dict]:
-        """Search knowledge base with semantic similarity."""
-        query_embedding = self.model.encode(query)
-        results = self.collection.query(
-            query_embeddings=[query_embedding.tolist()],
-            n_results=n_results
-        )
-        return results
-
-# Initialize on startup
-embedding_service = EmbeddingService()
-```
-
-**Step 3: Update your llm_service.py**
-
-```python
-# Add to backend/app/services/llm_service.py
-
-from app.services.embedding_service import embedding_service
-
-def search_knowledge_base_semantic(query: str) -> List[Dict]:
-    """Search using semantic similarity instead of keywords."""
-    results = embedding_service.search(query, n_results=3)
-    
-    matched_articles = []
-    for i, doc in enumerate(results['documents'][0]):
-        metadata = results['metadatas'][0][i]
-        distance = results['distances'][0][i]
-        
-        # Convert distance to similarity score (0-1)
-        similarity = 1 / (1 + distance)
-        
-        matched_articles.append({
-            "id": metadata['id'],
-            "title": metadata['title'],
-            "content": doc,
-            "category": metadata['category'],
-            "match_score": similarity
-        })
-    
-    return matched_articles
-
-# Update generate_ai_response to use semantic search
-async def generate_ai_response(conversation_id: int, user_message: str, db: Session):
-    # Use semantic search instead of keyword
-    matched_articles = search_knowledge_base_semantic(user_message)
-    # ... rest stays the same
-```
-
-**Step 4: Embed articles on startup**
-
-```python
-# In backend/app/main.py
-
-from app.services.embedding_service import embedding_service
+# In backend/app/main.py (can be added to startup)
+from app.services.rag_service import initialize_vector_db
+from app.database import SessionLocal
 
 @app.on_event("startup")
 async def startup_event():
     init_db()
-    print("🚀 Database initialized")
-    
-    # Embed knowledge base
-    from app.models import KnowledgeBase
     db = SessionLocal()
-    articles = db.query(KnowledgeBase).all()
-    article_dicts = [{
-        "id": a.id,
-        "title": a.title,
-        "content": a.content,
-        "category": a.category
-    } for a in articles]
-    embedding_service.embed_knowledge_base(article_dicts)
-    print("🧠 Knowledge base embedded")
-    
+    initialize_vector_db(db)  # Embed all existing articles
     db.close()
 ```
+
+**For Reference:** The actual implementation uses a singleton pattern (not a class) and is located in `backend/app/services/rag_service.py`. See the "Your V2 RAG Implementation" section above for the complete code.
 
 ### Example 2: Extract Training Data Script
 
@@ -1133,13 +1137,13 @@ python extract_training_data.py
 
 ### Question: "How do you train the AI on your knowledge base?"
 
-**Your Answer:**
+**Your Answer (V2 Updated):**
 
-> "I implemented a RAG system where we retrieve relevant articles from our knowledge base and inject them into the LLM's context window. This means the model doesn't need training—it uses the information we provide in real-time. The key advantage is that knowledge updates are instant: when an agent adds a new article or updates a policy, the AI immediately has access to it.
+> "I implemented a Vector RAG system where we retrieve relevant articles from our knowledge base using semantic search and inject them into the LLM's context window. This means the model doesn't need training—it uses the information we provide in real-time. The key advantage is that knowledge updates are instant: when an agent adds a new article or updates a policy, embeddings are automatically generated and the AI immediately has access to it.
 >
-> For retrieval, I started with keyword matching for MVP speed, but I've architected it to easily upgrade to semantic search using vector embeddings. That would improve match quality significantly.
+> For retrieval, V2 uses vector embeddings (sentence-transformers + ChromaDB) for semantic search. This dramatically improves match quality—queries like 'how do I get my money back' correctly match 'Return & Refund Policy' even without keyword overlap. The system automatically embeds new articles when they're created or updated.
 >
-> Importantly, we're collecting high-quality training data through our HITL feedback system. Agent corrections and ratings form preference pairs perfect for fine-tuning. Once we have 1,000+ examples, we can fine-tune using techniques like LoRA to teach the model our company's tone and common patterns, while keeping RAG for dynamic facts. That hybrid approach gives us the best of both worlds."
+> Importantly, we're collecting high-quality training data through our HITL feedback system. Agent corrections and ratings form preference pairs perfect for fine-tuning. Once we have 1,000+ examples, we can fine-tune using techniques like LoRA to teach the model our company's tone and common patterns, while keeping Vector RAG for dynamic facts. That hybrid approach gives us the best of both worlds."
 
 ### Question: "What's the difference between RAG and fine-tuning?"
 
@@ -1163,17 +1167,17 @@ python extract_training_data.py
 
 ### Question: "What would you build next?"
 
-**Your Answer:**
+**Your Answer (V2 Updated):**
 
 > "Three priorities:
 >
-> 1. **Upgrade retrieval to semantic search**: Move from keyword matching to vector embeddings using sentence transformers. This would significantly improve article matching quality, especially for paraphrased questions.
+> 1. **Enhance vector RAG**: Add hybrid search (combining vector + keyword), metadata filtering for category-specific searches, and reranking with cross-encoders for even better relevance. The foundation is there—these are incremental improvements.
 >
-> 2. **Close the feedback loop**: Once we have 500-1000 quality examples, implement automated retraining. Extract training data from feedback, fine-tune using LoRA, A/B test the new model, and deploy if metrics improve. Make this a continuous cycle.
+> 2. **Close the feedback loop**: Once we have 500-1000 quality examples, implement Phase 3 model fine-tuning. Extract training data from feedback, fine-tune using LoRA, A/B test the new model (framework already exists), and deploy if metrics improve. Make this a continuous cycle with automated retraining.
 >
-> 3. **Intent classification**: Add a classifier to categorize incoming questions (returns, shipping, technical, etc.) to enable better routing, specialized prompts per category, and topic-based analytics to identify knowledge gaps.
+> 3. **Improve intent classification**: Enhance the router agent with more intent categories, better few-shot examples from feedback, and confidence calibration. The multi-agent orchestration is already implemented—refining intent classification will improve routing accuracy.
 >
-> Long-term, I'd explore multi-agent orchestration—specialist agents per domain with a router agent for intent-based routing. But RAG + fine-tuning hybrid would deliver the most immediate value."
+> Long-term, I'd explore advanced RAG techniques like query expansion, multi-query retrieval, and self-RAG. But the Vector RAG + fine-tuning hybrid foundation is solid and delivering value now."
 
 ---
 
