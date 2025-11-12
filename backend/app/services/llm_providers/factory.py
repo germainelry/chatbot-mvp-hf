@@ -20,6 +20,15 @@ def _load_providers():
         _PROVIDER_REGISTRY["ollama"] = OllamaProvider
         _PROVIDER_REGISTRY["huggingface"] = HuggingFaceProvider
         
+        # Try to load HuggingFace Inference API provider (free tier)
+        try:
+            from app.services.llm_providers.huggingface_inference_provider import HuggingFaceInferenceProvider
+            _PROVIDER_REGISTRY["huggingface_inference"] = HuggingFaceInferenceProvider
+            # Also register as "huggingface_api" for convenience
+            _PROVIDER_REGISTRY["huggingface_api"] = HuggingFaceInferenceProvider
+        except ImportError:
+            pass
+        
         # Try to load cloud providers (optional)
         try:
             from app.services.llm_providers.openai_provider import OpenAIProvider

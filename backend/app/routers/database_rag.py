@@ -18,6 +18,7 @@ from app.services.database_rag_service import (
     test_database_connection
 )
 from app.middleware.tenant_middleware import get_tenant_id_from_request
+from app.middleware.auth import require_api_key
 
 router = APIRouter()
 
@@ -58,7 +59,8 @@ class SyncTableRequest(BaseModel):
 async def create_database_connection(
     request: Request,
     connection: DatabaseConnectionCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    api_key: str = Depends(require_api_key)
 ):
     """Create a new database connection."""
     tenant_id = get_tenant_id_from_request(request)
@@ -164,7 +166,8 @@ async def get_database_tables_endpoint(
 async def sync_database_table(
     request: Request,
     sync_request: SyncTableRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    api_key: str = Depends(require_api_key)
 ):
     """Sync a database table to knowledge base."""
     tenant_id = get_tenant_id_from_request(request)
@@ -202,7 +205,8 @@ async def sync_database_table(
 async def delete_database_connection(
     request: Request,
     connection_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    api_key: str = Depends(require_api_key)
 ):
     """Delete a database connection."""
     tenant_id = get_tenant_id_from_request(request)

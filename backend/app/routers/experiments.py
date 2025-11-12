@@ -9,6 +9,7 @@ from datetime import datetime
 
 from app.database import get_db
 from app.models import Experiment, ModelVersion
+from app.middleware.auth import require_api_key
 from app.services.experiment_service import (
     create_experiment,
     compare_experiment_versions,
@@ -63,7 +64,8 @@ class ExperimentResponse(BaseModel):
 @router.post("/model-versions", response_model=ModelVersionResponse)
 async def create_model_version(
     version: ModelVersionCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    api_key: str = Depends(require_api_key)
 ):
     """Create a new model version."""
     model_version = ModelVersion(
@@ -92,7 +94,8 @@ async def get_model_versions(
 @router.post("/experiments", response_model=ExperimentResponse)
 async def create_experiment_endpoint(
     experiment: ExperimentCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    api_key: str = Depends(require_api_key)
 ):
     """Create a new A/B test experiment."""
     exp = create_experiment(

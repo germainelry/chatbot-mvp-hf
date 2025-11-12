@@ -7,6 +7,7 @@ from typing import Optional
 
 from app.database import get_db
 from app.models import Conversation, Message, MessageType
+from app.middleware.auth import require_api_key
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -42,7 +43,8 @@ class MessageResponse(BaseModel):
 @router.post("", response_model=MessageResponse)
 async def create_message(
     message: MessageCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    api_key: str = Depends(require_api_key)
 ):
     """
     Create a new message in a conversation.
@@ -105,7 +107,8 @@ class MessageUpdate(BaseModel):
 async def update_message(
     message_id: int,
     update: MessageUpdate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    api_key: str = Depends(require_api_key)
 ):
     """
     Update an existing message.

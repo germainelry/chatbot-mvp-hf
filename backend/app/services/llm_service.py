@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.models import KnowledgeBase, Message, Conversation, TenantConfiguration
 from app.services.rag_service import search_knowledge_base_vector
 from app.services.llm_providers.factory import get_provider
+from app.services.llm_providers.encryption import decrypt_llm_config
 from app.config import get_default_llm_config, get_tone_prompt
 
 # Keep for backward compatibility
@@ -93,7 +94,8 @@ async def generate_ai_response(
     if tenant_config:
         llm_provider = tenant_config.llm_provider or default_config["provider"]
         llm_model = tenant_config.llm_model_name or default_config["model"]
-        llm_config = tenant_config.llm_config or {}
+        # Decrypt API keys from stored config
+        llm_config = decrypt_llm_config(tenant_config.llm_config) if tenant_config.llm_config else {}
         tone = tenant_config.tone or default_config["tone"]
         auto_send_threshold = tenant_config.auto_send_threshold or default_config["auto_send_threshold"]
         embedding_model_name = tenant_config.embedding_model or default_config.get("embedding_model")

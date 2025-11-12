@@ -10,6 +10,7 @@ from datetime import datetime
 
 from app.database import get_db
 from app.models import Tenant, TenantConfiguration
+from app.middleware.auth import require_api_key
 
 router = APIRouter()
 
@@ -41,7 +42,8 @@ class TenantResponse(BaseModel):
 @router.post("", response_model=TenantResponse)
 async def create_tenant(
     tenant: TenantCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    api_key: str = Depends(require_api_key)
 ):
     """Create a new tenant."""
     # Check if slug already exists
@@ -123,7 +125,8 @@ async def get_tenant(
 async def update_tenant(
     tenant_id: int,
     update: TenantUpdate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    api_key: str = Depends(require_api_key)
 ):
     """Update a tenant."""
     tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
@@ -158,7 +161,8 @@ async def update_tenant(
 @router.delete("/{tenant_id}")
 async def delete_tenant(
     tenant_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    api_key: str = Depends(require_api_key)
 ):
     """Delete a tenant."""
     tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()

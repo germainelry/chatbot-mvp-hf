@@ -11,6 +11,7 @@ from app.database import get_db
 from app.services.llm_service import generate_ai_response  # Keep for backward compatibility
 from app.services.agent_orchestrator import orchestrate_response
 from app.middleware.tenant_middleware import get_tenant_id_from_request
+from app.middleware.auth import require_api_key
 
 router = APIRouter()
 
@@ -35,6 +36,7 @@ async def generate_response(
     http_request: Request,
     request: AIGenerateRequest,
     db: Session = Depends(get_db),
+    api_key: str = Depends(require_api_key),
     use_orchestrator: bool = True  # Use multi-agent orchestrator by default
 ):
     """

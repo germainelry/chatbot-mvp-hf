@@ -6,8 +6,10 @@ from typing import Any, Dict, Optional
 
 from app.database import get_db
 from app.middleware.tenant_middleware import get_tenant_id_from_request
+from app.middleware.auth import require_api_key
 from app.models import Tenant, TenantConfiguration
 from app.services.llm_providers.factory import get_provider, list_available_providers
+from app.services.llm_providers.encryption import encrypt_llm_config, decrypt_llm_config
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -73,11 +75,14 @@ async def get_tenant_configuration(
         db.commit()
         db.refresh(config)
     
+    # Decrypt API keys before returning
+    decrypted_config = decrypt_llm_config(config.llm_config) if config.llm_config else None
+    
     return TenantConfigurationResponse(
         tenant_id=config.tenant_id,
         llm_provider=config.llm_provider,
         llm_model_name=config.llm_model_name,
-        llm_config=config.llm_config,
+        llm_config=decrypted_config,
         embedding_model=config.embedding_model,
         tone=config.tone,
         auto_send_threshold=config.auto_send_threshold,
@@ -89,7 +94,8 @@ async def get_tenant_configuration(
 async def update_tenant_configuration(
     tenant_id: int,
     update: TenantConfigurationUpdate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    api_key: str = Depends(require_api_key)
 ):
     """Update tenant configuration."""
     tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
@@ -111,7 +117,8 @@ async def update_tenant_configuration(
     if update.llm_model_name is not None:
         config.llm_model_name = update.llm_model_name
     if update.llm_config is not None:
-        config.llm_config = update.llm_config
+        # Encrypt API keys before storing
+        config.llm_config = encrypt_llm_config(update.llm_config)
     if update.embedding_model is not None:
         config.embedding_model = update.embedding_model
     if update.tone is not None:
@@ -124,11 +131,14 @@ async def update_tenant_configuration(
     db.commit()
     db.refresh(config)
     
+    # Decrypt API keys before returning
+    decrypted_config = decrypt_llm_config(config.llm_config) if config.llm_config else None
+    
     return TenantConfigurationResponse(
         tenant_id=config.tenant_id,
         llm_provider=config.llm_provider,
         llm_model_name=config.llm_model_name,
-        llm_config=config.llm_config,
+        llm_config=decrypted_config,
         embedding_model=config.embedding_model,
         tone=config.tone,
         auto_send_threshold=config.auto_send_threshold,
@@ -155,6 +165,20 @@ async def list_llm_models(provider: str):
             "mistralai/Mistral-7B-Instruct-v0.2",
             "meta-llama/Llama-2-7b-chat-hf",
             "microsoft/DialoGPT-medium"
+        ],
+        "huggingface_inference": [
+            "mistralai/Mistral-7B-Instruct-v0.2",
+            "mistralai/Mixtral-8x7B-Instruct-v0.1",
+            "meta-llama/Llama-2-7b-chat-hf",
+            "google/flan-t5-large",
+            "microsoft/DialoGPT-large"
+        ],
+        "huggingface_api": [
+            "mistralai/Mistral-7B-Instruct-v0.2",
+            "mistralai/Mixtral-8x7B-Instruct-v0.1",
+            "meta-llama/Llama-2-7b-chat-hf",
+            "google/flan-t5-large",
+            "microsoft/DialoGPT-large"
         ]
     }
     
@@ -183,7 +207,10 @@ async def list_llm_models(provider: str):
 
 
 @router.post("/test-llm")
-async def test_llm_connection(test_request: LLMTestRequest):
+async def test_llm_connection(
+    test_request: LLMTestRequest,
+    api_key: str = Depends(require_api_key)
+):
     """Test LLM connection."""
     provider = get_provider(test_request.provider, {
         "model": test_request.model,

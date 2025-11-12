@@ -14,8 +14,11 @@ from app.database import get_db
 from app.models import KnowledgeBase, KnowledgeBaseSource, SourceType, SourceStatus
 from app.services.document_processor import process_document
 from app.services.rag_service import add_article_to_vector_db
+from app.services.storage_service import upload_file_to_supabase, get_supabase_client
 from app.middleware.tenant_middleware import get_tenant_id_from_request
+from app.middleware.auth import require_api_key
 from fastapi import Request
+import tempfile
 
 router = APIRouter()
 
@@ -34,7 +37,8 @@ class UploadResponse(BaseModel):
 async def upload_pdf(
     request: Request,
     file: UploadFile = File(...),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    api_key: str = Depends(require_api_key)
 ):
     """Upload and process PDF file."""
     tenant_id = get_tenant_id_from_request(request)
@@ -44,20 +48,53 @@ async def upload_pdf(
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="File must be a PDF")
     
-    # Save file
-    file_path = os.path.join(UPLOAD_DIR, f"{tenant_id}_{file.filename}")
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    # Upload to Supabase Storage if configured, otherwise use local filesystem
+    file_url = None
+    file_path = None
+    
+    supabase_client = get_supabase_client()
+    if supabase_client:
+        try:
+            # Upload to Supabase Storage
+            file_url = await upload_file_to_supabase(
+                file=file,
+                bucket_name="knowledge-base-files",
+                tenant_id=tenant_id,
+                folder="pdfs"
+            )
+            # Reset file pointer for processing
+            await file.seek(0)
+            # Use temporary file for processing
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+                shutil.copyfileobj(file.file, tmp_file)
+                file_path = tmp_file.name
+        except Exception as e:
+            print(f"Error uploading to Supabase, falling back to local storage: {e}")
+            # Fall back to local storage
+            file_path = os.path.join(UPLOAD_DIR, f"{tenant_id}_{file.filename}")
+            with open(file_path, "wb") as buffer:
+                await file.seek(0)
+                shutil.copyfileobj(file.file, buffer)
+    else:
+        # Use local filesystem
+        file_path = os.path.join(UPLOAD_DIR, f"{tenant_id}_{file.filename}")
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
     
     try:
         # Process PDF
         articles = process_document(file_path, file_type="pdf")
         
         # Create knowledge base source
+        source_config = {
+            "filename": file.filename,
+            "file_path": file_path if not file_url else None,
+            "file_url": file_url
+        }
         source = KnowledgeBaseSource(
             tenant_id=tenant_id,
             source_type=SourceType.PDF,
-            source_config={"file_path": file_path, "filename": file.filename},
+            source_config=source_config,
             status=SourceStatus.PROCESSING
         )
         db.add(source)
@@ -93,8 +130,15 @@ async def upload_pdf(
             source_id=source.id
         )
     except Exception as e:
-        source.status = SourceStatus.ERROR
-        db.commit()
+        if source:
+            source.status = SourceStatus.ERROR
+            db.commit()
+        # Clean up temporary file if used
+        if file_path and file_path.startswith(tempfile.gettempdir()):
+            try:
+                os.unlink(file_path)
+            except:
+                pass
         raise HTTPException(status_code=500, detail=f"Error processing PDF: {str(e)}")
 
 
@@ -102,7 +146,8 @@ async def upload_pdf(
 async def upload_csv(
     request: Request,
     file: UploadFile = File(...),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    api_key: str = Depends(require_api_key)
 ):
     """Upload and process CSV file."""
     tenant_id = get_tenant_id_from_request(request)
@@ -170,7 +215,8 @@ async def upload_csv(
 async def upload_document(
     request: Request,
     file: UploadFile = File(...),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    api_key: str = Depends(require_api_key)
 ):
     """Upload and process text document (.txt, .md, .docx)."""
     tenant_id = get_tenant_id_from_request(request)

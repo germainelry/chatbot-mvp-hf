@@ -12,6 +12,7 @@ from app.database import get_db
 from app.models import Feedback, FeedbackRating, Conversation, Message, TrainingData
 from app.services.evaluation_service import evaluate_ai_response, save_evaluation_metrics
 from app.services.data_logging_service import log_agent_action
+from app.middleware.auth import require_api_key
 
 router = APIRouter()
 
@@ -40,7 +41,8 @@ class FeedbackResponse(BaseModel):
 @router.post("", response_model=FeedbackResponse)
 async def create_feedback(
     feedback: FeedbackCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    api_key: str = Depends(require_api_key)
 ):
     """
     Submit agent feedback on AI responses.
@@ -166,7 +168,8 @@ async def get_feedback(
 
 @router.post("/retrain")
 async def trigger_retraining(
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    api_key: str = Depends(require_api_key)
 ):
     """
     Manually trigger retraining pipeline.

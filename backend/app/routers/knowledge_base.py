@@ -12,6 +12,7 @@ from app.database import get_db
 from app.models import KnowledgeBase
 from app.services.rag_service import add_article_to_vector_db
 from app.middleware.tenant_middleware import get_tenant_id_from_request
+from app.middleware.auth import require_api_key
 
 router = APIRouter()
 
@@ -47,7 +48,8 @@ class KnowledgeBaseResponse(BaseModel):
 async def create_article(
     request: Request,
     article: KnowledgeBaseCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    api_key: str = Depends(require_api_key)
 ):
     """Create a new knowledge base article."""
     tenant_id = get_tenant_id_from_request(request)
@@ -128,7 +130,8 @@ async def update_article(
     request: Request,
     article_id: int,
     update: KnowledgeBaseUpdate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    api_key: str = Depends(require_api_key)
 ):
     """Update a knowledge base article."""
     tenant_id = get_tenant_id_from_request(request)
@@ -169,7 +172,8 @@ async def update_article(
 async def delete_article(
     request: Request,
     article_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    api_key: str = Depends(require_api_key)
 ):
     """Delete a knowledge base article."""
     tenant_id = get_tenant_id_from_request(request)

@@ -11,6 +11,7 @@ from datetime import datetime
 from app.database import get_db
 from app.models import Conversation, ConversationStatus, Message
 from app.middleware.tenant_middleware import get_tenant_id_from_request
+from app.middleware.auth import require_api_key
 
 router = APIRouter()
 
@@ -54,7 +55,8 @@ class ConversationResponse(BaseModel):
 async def create_conversation(
     request: Request,
     conversation: ConversationCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    api_key: str = Depends(require_api_key)
 ):
     """Create a new customer conversation."""
     tenant_id = get_tenant_id_from_request(request)
@@ -177,7 +179,8 @@ async def get_conversation_messages(
 async def update_conversation(
     conversation_id: int,
     update: ConversationUpdate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    api_key: str = Depends(require_api_key)
 ):
     """Update conversation status (e.g., resolve, escalate)."""
     conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()

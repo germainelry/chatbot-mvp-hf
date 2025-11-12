@@ -12,6 +12,7 @@ from datetime import datetime
 from app.database import get_db
 from app.models import AgentAction
 from app.services.data_logging_service import log_agent_action
+from app.middleware.auth import require_api_key
 
 router = APIRouter()
 
@@ -38,7 +39,8 @@ class AgentActionResponse(BaseModel):
 @router.post("", response_model=AgentActionResponse)
 async def create_agent_action(
     action: AgentActionCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    api_key: str = Depends(require_api_key)
 ):
     """
     Log an agent action (approve, reject, edit, escalate).

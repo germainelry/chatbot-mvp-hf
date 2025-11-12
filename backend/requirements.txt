@@ -1,5 +1,6 @@
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
+gunicorn>=21.2.0
 sqlalchemy>=2.0.25
 pydantic>=2.10.0
 pydantic-settings>=2.7.0
@@ -30,3 +31,12 @@ accelerate>=0.24.0  # Optional, for optimization
 # Cloud LLM providers (optional)
 openai>=1.0.0  # OpenAI API
 anthropic>=0.7.0  # Anthropic Claude API
+
+# Rate limiting
+slowapi>=0.1.9
+
+# HuggingFace Inference API
+huggingface_hub>=0.20.0
+
+# Supabase client
+supabase>=2.0.0
