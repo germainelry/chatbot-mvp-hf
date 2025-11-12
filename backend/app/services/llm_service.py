@@ -1,37 +1,40 @@
 """
-LLM service with Ollama integration and fallback logic.
+LLM service with provider abstraction and tenant-aware configuration.
 Implements confidence scoring for Human-in-the-Loop workflow.
 """
 import os
-from typing import Dict, List
+from typing import Dict, List, Optional
 from sqlalchemy.orm import Session
-import re
 
-from app.models import KnowledgeBase, Message, Conversation
+from app.models import KnowledgeBase, Message, Conversation, TenantConfiguration
 from app.services.rag_service import search_knowledge_base_vector
+from app.services.llm_providers.factory import get_provider
+from app.config import get_default_llm_config, get_tone_prompt
 
-# Ollama will be optional - fallback to rule-based for reliability
+# Keep for backward compatibility
 OLLAMA_AVAILABLE = False
 try:
     import ollama
     OLLAMA_AVAILABLE = True
 except ImportError:
-    print("⚠️  Ollama not available, using fallback responses")
+    pass
 
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
-
-# Auto-send threshold: AI responses with confidence >= this value are sent automatically
-# Lower values = more automation but potentially lower quality
-# Higher values = more agent review but better quality assurance
 AUTO_SEND_THRESHOLD = float(os.getenv("AUTO_SEND_THRESHOLD", "0.65"))
 
 
-def search_knowledge_base(query: str, db: Session) -> List[Dict]:
+def search_knowledge_base(query: str, db: Session, tenant_id: Optional[int] = None, embedding_model_name: Optional[str] = None) -> List[Dict]:
     """
     Search knowledge base using vector embeddings (with keyword fallback).
+    
+    Args:
+        query: Search query
+        db: Database session
+        tenant_id: Tenant ID for filtering
+        embedding_model_name: Name of embedding model to use
     """
     # Use vector search (will fallback to keyword if embeddings unavailable)
-    return search_knowledge_base_vector(query, db, top_k=3)
+    return search_knowledge_base_vector(query, db, top_k=3, tenant_id=tenant_id, embedding_model_name=embedding_model_name)
 
 
 def calculate_confidence_score(matched_articles: List[Dict], query: str) -> float:
@@ -64,15 +67,46 @@ def calculate_confidence_score(matched_articles: List[Dict], query: str) -> floa
 async def generate_ai_response(
     conversation_id: int,
     user_message: str,
-    db: Session
+    db: Session,
+    tenant_id: Optional[int] = None
 ) -> Dict:
     """
-    Generate AI response using Ollama or fallback logic.
+    Generate AI response using configured LLM provider.
     Returns response with confidence score for HITL decision.
+    
+    Args:
+        conversation_id: Conversation ID
+        user_message: User's message
+        db: Database session
+        tenant_id: Tenant ID for configuration lookup
     """
     
-    # Search knowledge base
-    matched_articles = search_knowledge_base(user_message, db)
+    # Load tenant configuration
+    tenant_config = None
+    if tenant_id:
+        tenant_config = db.query(TenantConfiguration).filter(
+            TenantConfiguration.tenant_id == tenant_id
+        ).first()
+    
+    # Get configuration (tenant config > env vars > defaults)
+    default_config = get_default_llm_config()
+    if tenant_config:
+        llm_provider = tenant_config.llm_provider or default_config["provider"]
+        llm_model = tenant_config.llm_model_name or default_config["model"]
+        llm_config = tenant_config.llm_config or {}
+        tone = tenant_config.tone or default_config["tone"]
+        auto_send_threshold = tenant_config.auto_send_threshold or default_config["auto_send_threshold"]
+        embedding_model_name = tenant_config.embedding_model or default_config.get("embedding_model")
+    else:
+        llm_provider = default_config["provider"]
+        llm_model = default_config["model"]
+        llm_config = {}
+        tone = default_config["tone"]
+        auto_send_threshold = default_config["auto_send_threshold"]
+        embedding_model_name = default_config.get("embedding_model")
+    
+    # Search knowledge base with tenant's embedding model
+    matched_articles = search_knowledge_base(user_message, db, tenant_id=tenant_id, embedding_model_name=embedding_model_name)
     
     # Calculate confidence
     confidence = calculate_confidence_score(matched_articles, user_message)
@@ -84,36 +118,56 @@ async def generate_ai_response(
         for article in matched_articles[:2]:  # Use top 2
             context += f"**{article['title']}**\n{article['content'][:300]}...\n\n"
     
-    # Try Ollama first
-    if OLLAMA_AVAILABLE:
-        try:
-            response = await generate_ollama_response(user_message, context)
-            return {
-                "response": response,
-                "confidence_score": confidence,
-                "matched_articles": matched_articles,
-                "reasoning": "Generated using Ollama LLM",
-                "auto_send_threshold": AUTO_SEND_THRESHOLD,
-                "should_auto_send": confidence >= AUTO_SEND_THRESHOLD
-            }
-        except Exception as e:
-            print(f"Ollama failed: {e}, using fallback")
+    # Get LLM provider
+    provider_config = {
+        "model": llm_model,
+        **llm_config
+    }
+    provider = get_provider(llm_provider, provider_config)
     
-    # Fallback to rule-based responses
-    response = generate_fallback_response(user_message, matched_articles)
+    # Generate response
+    reasoning = f"Generated using {llm_provider} LLM"
+    if provider and provider.is_available():
+        try:
+            # Build system prompt with tone
+            system_prompt = get_tone_prompt(tone)
+            system_prompt += "\n\nUse the following information to answer the customer's question. If the information provided doesn't fully answer the question, acknowledge this and offer to escalate to a human agent."
+            
+            # Build user prompt with context
+            user_prompt = f"{context}\n\nCustomer Question: {user_message}\n\nProvide a helpful, concise response."
+            
+            response = await provider.generate_response(
+                prompt=user_prompt,
+                system_prompt=system_prompt,
+                config=provider_config
+            )
+        except Exception as e:
+            print(f"LLM provider {llm_provider} failed: {e}, using fallback")
+            response = generate_fallback_response(user_message, matched_articles)
+            reasoning = f"Fallback (provider {llm_provider} failed)"
+    else:
+        # Fallback to rule-based responses
+        response = generate_fallback_response(user_message, matched_articles)
+        reasoning = f"Fallback (provider {llm_provider} unavailable)"
     
     return {
         "response": response,
         "confidence_score": confidence,
         "matched_articles": matched_articles,
-        "reasoning": "Generated using fallback logic (Ollama unavailable)",
-        "auto_send_threshold": AUTO_SEND_THRESHOLD,
-        "should_auto_send": confidence >= AUTO_SEND_THRESHOLD
+        "reasoning": reasoning,
+        "auto_send_threshold": auto_send_threshold,
+        "should_auto_send": confidence >= auto_send_threshold,
+        "llm_provider": llm_provider,
+        "llm_model": llm_model
     }
 
 
+# Keep for backward compatibility
 async def generate_ollama_response(user_message: str, context: str) -> str:
-    """Generate response using Ollama LLM."""
+    """Generate response using Ollama LLM (legacy function)."""
+    if not OLLAMA_AVAILABLE:
+        raise Exception("Ollama is not available")
+    
     prompt = f"""You are a helpful customer support assistant. Use the following information to answer the customer's question.
 
 {context}

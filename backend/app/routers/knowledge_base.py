@@ -2,7 +2,7 @@
 Knowledge base management endpoints.
 Allows agents to add/update information for AI reference.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Optional
@@ -11,6 +11,7 @@ from datetime import datetime
 from app.database import get_db
 from app.models import KnowledgeBase
 from app.services.rag_service import add_article_to_vector_db
+from app.middleware.tenant_middleware import get_tenant_id_from_request
 
 router = APIRouter()
 
@@ -44,11 +45,17 @@ class KnowledgeBaseResponse(BaseModel):
 
 @router.post("", response_model=KnowledgeBaseResponse)
 async def create_article(
+    request: Request,
     article: KnowledgeBaseCreate,
     db: Session = Depends(get_db)
 ):
     """Create a new knowledge base article."""
+    tenant_id = get_tenant_id_from_request(request)
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="Tenant ID required")
+    
     db_article = KnowledgeBase(
+        tenant_id=tenant_id,
         title=article.title,
         content=article.content,
         category=article.category,
@@ -60,19 +67,24 @@ async def create_article(
     db.refresh(db_article)
     
     # Generate and store embedding
-    add_article_to_vector_db(db_article.id, db_article.title, db_article.content, db)
+    add_article_to_vector_db(db_article.id, db_article.title, db_article.content, db, tenant_id=tenant_id)
     
     return db_article
 
 
 @router.get("", response_model=List[KnowledgeBaseResponse])
 async def get_articles(
+    request: Request,
     category: Optional[str] = None,
     search: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
     """Get all knowledge base articles with optional filtering."""
-    query = db.query(KnowledgeBase)
+    tenant_id = get_tenant_id_from_request(request)
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="Tenant ID required")
+    
+    query = db.query(KnowledgeBase).filter(KnowledgeBase.tenant_id == tenant_id)
     
     if category:
         query = query.filter(KnowledgeBase.category == category)
@@ -91,11 +103,19 @@ async def get_articles(
 
 @router.get("/{article_id}", response_model=KnowledgeBaseResponse)
 async def get_article(
+    request: Request,
     article_id: int,
     db: Session = Depends(get_db)
 ):
     """Get a specific knowledge base article."""
-    article = db.query(KnowledgeBase).filter(KnowledgeBase.id == article_id).first()
+    tenant_id = get_tenant_id_from_request(request)
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="Tenant ID required")
+    
+    article = db.query(KnowledgeBase).filter(
+        KnowledgeBase.id == article_id,
+        KnowledgeBase.tenant_id == tenant_id
+    ).first()
     
     if not article:
         raise HTTPException(status_code=404, detail="Article not found")
@@ -105,12 +125,20 @@ async def get_article(
 
 @router.put("/{article_id}", response_model=KnowledgeBaseResponse)
 async def update_article(
+    request: Request,
     article_id: int,
     update: KnowledgeBaseUpdate,
     db: Session = Depends(get_db)
 ):
     """Update a knowledge base article."""
-    article = db.query(KnowledgeBase).filter(KnowledgeBase.id == article_id).first()
+    tenant_id = get_tenant_id_from_request(request)
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="Tenant ID required")
+    
+    article = db.query(KnowledgeBase).filter(
+        KnowledgeBase.id == article_id,
+        KnowledgeBase.tenant_id == tenant_id
+    ).first()
     
     if not article:
         raise HTTPException(status_code=404, detail="Article not found")
@@ -131,18 +159,27 @@ async def update_article(
     
     # Regenerate embedding if content changed
     if update.content is not None or update.title is not None:
-        add_article_to_vector_db(article.id, article.title, article.content, db)
+        tenant_id = get_tenant_id_from_request(request)
+        add_article_to_vector_db(article.id, article.title, article.content, db, tenant_id=tenant_id)
     
     return article
 
 
 @router.delete("/{article_id}")
 async def delete_article(
+    request: Request,
     article_id: int,
     db: Session = Depends(get_db)
 ):
     """Delete a knowledge base article."""
-    article = db.query(KnowledgeBase).filter(KnowledgeBase.id == article_id).first()
+    tenant_id = get_tenant_id_from_request(request)
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="Tenant ID required")
+    
+    article = db.query(KnowledgeBase).filter(
+        KnowledgeBase.id == article_id,
+        KnowledgeBase.tenant_id == tenant_id
+    ).first()
     
     if not article:
         raise HTTPException(status_code=404, detail="Article not found")

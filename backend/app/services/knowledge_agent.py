@@ -3,10 +3,11 @@ Knowledge Agent - Handles FAQ and knowledge base queries.
 Extracted from llm_service, specialized for knowledge retrieval.
 """
 import os
-from typing import Dict, List
+from typing import Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from app.services.llm_service import (
+    generate_ai_response,
     generate_ollama_response,
     generate_fallback_response,
     OLLAMA_AVAILABLE,
@@ -37,51 +38,28 @@ def calculate_confidence_score(matched_articles: List[Dict], query: str) -> floa
 async def handle_knowledge_query(
     user_message: str,
     conversation_id: int,
-    db: Session
+    db: Session,
+    tenant_id: Optional[int] = None
 ) -> Dict:
     """
     Handle knowledge base query using RAG.
     Returns response with confidence score.
     """
     # Search knowledge base
-    matched_articles = search_knowledge_base_vector(user_message, db, top_k=3)
+    matched_articles = search_knowledge_base_vector(user_message, db, top_k=3, tenant_id=tenant_id)
     
     # Calculate confidence
     confidence = calculate_confidence_score(matched_articles, user_message)
     
-    # Build context from knowledge base
-    context = ""
-    if matched_articles:
-        context = "Relevant information:\n\n"
-        for article in matched_articles[:2]:  # Use top 2
-            context += f"**{article['title']}**\n{article['content'][:300]}...\n\n"
+    # Use tenant-aware LLM service
+    result = await generate_ai_response(
+        conversation_id=conversation_id,
+        user_message=user_message,
+        db=db,
+        tenant_id=tenant_id
+    )
     
-    # Generate response using Ollama or fallback
-    if OLLAMA_AVAILABLE:
-        try:
-            response = await generate_ollama_response(user_message, context)
-            return {
-                "response": response,
-                "confidence_score": confidence,
-                "matched_articles": matched_articles,
-                "reasoning": "Generated using Knowledge Agent with Ollama LLM",
-                "auto_send_threshold": AUTO_SEND_THRESHOLD,
-                "should_auto_send": confidence >= AUTO_SEND_THRESHOLD,
-                "agent_type": "knowledge"
-            }
-        except Exception as e:
-            print(f"Ollama failed: {e}, using fallback")
-    
-    # Fallback to rule-based responses
-    response = generate_fallback_response(user_message, matched_articles)
-    
-    return {
-        "response": response,
-        "confidence_score": confidence,
-        "matched_articles": matched_articles,
-        "reasoning": "Generated using Knowledge Agent with fallback logic",
-        "auto_send_threshold": AUTO_SEND_THRESHOLD,
-        "should_auto_send": confidence >= AUTO_SEND_THRESHOLD,
-        "agent_type": "knowledge"
-    }
+    # Add agent type
+    result["agent_type"] = "knowledge"
+    return result
 

@@ -18,27 +18,55 @@ try:
 except ImportError:
     print("⚠️  sentence-transformers or chromadb not available, using fallback")
 
-# Initialize embedding model (lazy loading)
-_embedding_model = None
+# Initialize embedding models (lazy loading, cached per model name)
+_embedding_models = {}  # Cache for multiple models: {model_name: SentenceTransformer}
 _chroma_client = None
-_chroma_collection = None
+_chroma_collections = {}  # Cache for tenant-specific collections
 
-EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+DEFAULT_EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 
 
-def get_embedding_model():
-    """Lazy load the embedding model."""
-    global _embedding_model
+def get_embedding_model(model_name: Optional[str] = None):
+    """
+    Lazy load the embedding model.
+    
+    Args:
+        model_name: Name of the embedding model to load. If None, uses default.
+    
+    Returns:
+        SentenceTransformer model or None if not available
+    """
+    global _embedding_models
     if not EMBEDDING_AVAILABLE:
         return None
-    if _embedding_model is None:
-        _embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-    return _embedding_model
+    
+    # Use provided model name or default
+    model_name = model_name or DEFAULT_EMBEDDING_MODEL
+    
+    # Check cache
+    if model_name in _embedding_models:
+        return _embedding_models[model_name]
+    
+    # Load model
+    try:
+        print(f"Loading embedding model: {model_name}")
+        model = SentenceTransformer(model_name)
+        _embedding_models[model_name] = model
+        return model
+    except Exception as e:
+        print(f"Error loading embedding model {model_name}: {e}")
+        # Fallback to default if specified model fails
+        if model_name != DEFAULT_EMBEDDING_MODEL:
+            return get_embedding_model(DEFAULT_EMBEDDING_MODEL)
+        return None
 
 
-def get_chroma_collection():
-    """Initialize and return ChromaDB collection."""
-    global _chroma_client, _chroma_collection
+def get_chroma_collection(tenant_id: Optional[int] = None):
+    """
+    Initialize and return ChromaDB collection for a tenant.
+    Uses tenant-specific collections for isolation.
+    """
+    global _chroma_client, _chroma_collections
     if not EMBEDDING_AVAILABLE:
         return None
     
@@ -48,28 +76,41 @@ def get_chroma_collection():
         os.makedirs(chroma_path, exist_ok=True)
         _chroma_client = chromadb.PersistentClient(path=chroma_path, settings=Settings(anonymized_telemetry=False))
     
-    if _chroma_collection is None:
-        # Get or create collection
-        try:
-            _chroma_collection = _chroma_client.get_collection("knowledge_base")
-        except:
-            _chroma_collection = _chroma_client.create_collection(
-                name="knowledge_base",
-                metadata={"hnsw:space": "cosine"}
-            )
+    # Use tenant-specific collection name
+    collection_name = f"knowledge_base_tenant_{tenant_id}" if tenant_id else "knowledge_base"
     
-    return _chroma_collection
+    # Check cache
+    if collection_name in _chroma_collections:
+        return _chroma_collections[collection_name]
+    
+    # Get or create collection
+    try:
+        collection = _chroma_client.get_collection(collection_name)
+    except:
+        collection = _chroma_client.create_collection(
+            name=collection_name,
+            metadata={"hnsw:space": "cosine", "tenant_id": str(tenant_id) if tenant_id else "default"}
+        )
+    
+    _chroma_collections[collection_name] = collection
+    return collection
 
 
-def generate_embedding(text: str) -> Optional[List[float]]:
+def generate_embedding(text: str, model_name: Optional[str] = None) -> Optional[List[float]]:
     """
     Generate vector embedding for text.
-    Returns None if embeddings are not available.
+    
+    Args:
+        text: Text to embed
+        model_name: Name of the embedding model to use. If None, uses default.
+    
+    Returns:
+        Embedding vector or None if embeddings are not available.
     """
     if not EMBEDDING_AVAILABLE:
         return None
     
-    model = get_embedding_model()
+    model = get_embedding_model(model_name)
     if model is None:
         return None
     
@@ -96,23 +137,30 @@ def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
     return float(dot_product / (norm1 * norm2))
 
 
-def search_knowledge_base_vector(query: str, db: Session, top_k: int = 3) -> List[Dict]:
+def search_knowledge_base_vector(query: str, db: Session, top_k: int = 3, tenant_id: Optional[int] = None, embedding_model_name: Optional[str] = None) -> List[Dict]:
     """
     Search knowledge base using vector similarity.
     Falls back to keyword search if embeddings are not available.
+    
+    Args:
+        query: Search query
+        db: Database session
+        top_k: Number of results to return
+        tenant_id: Tenant ID for filtering
+        embedding_model_name: Name of embedding model to use. If None, uses default.
     """
     if not EMBEDDING_AVAILABLE:
         # Fallback to keyword search
-        return search_knowledge_base_keyword(query, db, top_k)
+        return search_knowledge_base_keyword(query, db, top_k, tenant_id=tenant_id)
     
-    collection = get_chroma_collection()
+    collection = get_chroma_collection(tenant_id=tenant_id)
     if collection is None:
-        return search_knowledge_base_keyword(query, db, top_k)
+        return search_knowledge_base_keyword(query, db, top_k, tenant_id=tenant_id)
     
     # Generate query embedding
-    query_embedding = generate_embedding(query)
+    query_embedding = generate_embedding(query, model_name=embedding_model_name)
     if query_embedding is None:
-        return search_knowledge_base_keyword(query, db, top_k)
+        return search_knowledge_base_keyword(query, db, top_k, tenant_id=tenant_id)
     
     try:
         # Search in ChromaDB
@@ -125,9 +173,13 @@ def search_knowledge_base_vector(query: str, db: Session, top_k: int = 3) -> Lis
         matched_articles = []
         if results['ids'] and len(results['ids'][0]) > 0:
             from app.models import KnowledgeBase
+            query_filter = db.query(KnowledgeBase)
+            if tenant_id:
+                query_filter = query_filter.filter(KnowledgeBase.tenant_id == tenant_id)
+            
             for i, article_id in enumerate(results['ids'][0]):
-                # Get article from database
-                article = db.query(KnowledgeBase).filter_by(id=int(article_id)).first()
+                # Get article from database with tenant filter
+                article = query_filter.filter(KnowledgeBase.id == int(article_id)).first()
                 
                 if article:
                     distance = results['distances'][0][i] if 'distances' in results else 0.0
@@ -144,21 +196,32 @@ def search_knowledge_base_vector(query: str, db: Session, top_k: int = 3) -> Lis
         
         # If no results from ChromaDB, fallback to keyword search
         if not matched_articles:
-            return search_knowledge_base_keyword(query, db, top_k)
+            return search_knowledge_base_keyword(query, db, top_k, tenant_id=tenant_id)
         
         return matched_articles
     
     except Exception as e:
         print(f"Error in vector search: {e}")
-        return search_knowledge_base_keyword(query, db, top_k)
+        return search_knowledge_base_keyword(query, db, top_k, tenant_id=tenant_id)
 
 
-def search_knowledge_base_keyword(query: str, db: Session, top_k: int = 3) -> List[Dict]:
-    """Fallback keyword-based search."""
+def search_knowledge_base_keyword(query: str, db: Session, top_k: int = 3, tenant_id: Optional[int] = None) -> List[Dict]:
+    """
+    Fallback keyword-based search.
+    
+    Args:
+        query: Search query
+        db: Database session
+        top_k: Number of results to return
+        tenant_id: Tenant ID for filtering
+    """
     from app.models import KnowledgeBase
     
     query_lower = query.lower()
-    all_articles = db.query(KnowledgeBase).all()
+    query_filter = db.query(KnowledgeBase)
+    if tenant_id:
+        query_filter = query_filter.filter(KnowledgeBase.tenant_id == tenant_id)
+    all_articles = query_filter.all()
     
     matched_articles = []
     for article in all_articles:
@@ -182,20 +245,28 @@ def search_knowledge_base_keyword(query: str, db: Session, top_k: int = 3) -> Li
     return matched_articles[:top_k]
 
 
-def add_article_to_vector_db(article_id: int, title: str, content: str, db: Session):
+def add_article_to_vector_db(article_id: int, title: str, content: str, db: Session, tenant_id: Optional[int] = None, embedding_model_name: Optional[str] = None):
     """
     Add or update article in vector database.
+    
+    Args:
+        article_id: Article ID
+        title: Article title
+        content: Article content
+        db: Database session
+        tenant_id: Tenant ID for collection selection
+        embedding_model_name: Name of embedding model to use. If None, uses default.
     """
     if not EMBEDDING_AVAILABLE:
         return
     
-    collection = get_chroma_collection()
+    collection = get_chroma_collection(tenant_id=tenant_id)
     if collection is None:
         return
     
     # Generate embedding for article
     article_text = f"{title} {content}"
-    embedding = generate_embedding(article_text)
+    embedding = generate_embedding(article_text, model_name=embedding_model_name)
     
     if embedding is None:
         return
@@ -206,7 +277,7 @@ def add_article_to_vector_db(article_id: int, title: str, content: str, db: Sess
             ids=[str(article_id)],
             embeddings=[embedding],
             documents=[article_text],
-            metadatas=[{"article_id": article_id, "title": title}]
+            metadatas=[{"article_id": article_id, "title": title, "tenant_id": str(tenant_id) if tenant_id else "default"}]
         )
         
         # Also update embedding in SQLite

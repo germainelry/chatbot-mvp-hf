@@ -2,7 +2,7 @@
 Agent Orchestrator - Coordinates multi-agent system.
 Routes messages to appropriate agents based on intent classification.
 """
-from typing import Dict
+from typing import Dict, Optional
 from sqlalchemy.orm import Session
 
 from app.services.router_agent import classify_intent, should_escalate
@@ -13,7 +13,8 @@ from app.services.escalation_agent import handle_escalation, get_escalation_reas
 async def orchestrate_response(
     conversation_id: int,
     user_message: str,
-    db: Session
+    db: Session,
+    tenant_id: Optional[int] = None
 ) -> Dict:
     """
     Main orchestration function.
@@ -43,7 +44,8 @@ async def orchestrate_response(
         result = await handle_knowledge_query(
             user_message=user_message,
             conversation_id=conversation_id,
-            db=db
+            db=db,
+            tenant_id=tenant_id
         )
         result["intent"] = intent
         result["intent_confidence"] = confidence
@@ -54,7 +56,8 @@ async def orchestrate_response(
         result = await handle_knowledge_query(
             user_message=user_message,
             conversation_id=conversation_id,
-            db=db
+            db=db,
+            tenant_id=tenant_id
         )
         # Lower confidence threshold for technical support
         if result["confidence_score"] < 0.6:
@@ -74,7 +77,8 @@ async def orchestrate_response(
     result = await handle_knowledge_query(
         user_message=user_message,
         conversation_id=conversation_id,
-        db=db
+        db=db,
+        tenant_id=tenant_id
     )
     result["intent"] = intent
     result["intent_confidence"] = confidence

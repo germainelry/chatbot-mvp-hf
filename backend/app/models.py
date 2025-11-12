@@ -50,10 +50,111 @@ class AgentType(str, enum.Enum):
     ESCALATION = "escalation"
 
 
+class SourceType(str, enum.Enum):
+    """Types of knowledge base sources."""
+    MANUAL = "manual"
+    PDF = "pdf"
+    CSV = "csv"
+    DATABASE = "database"
+    DOCUMENT = "document"
+
+
+class SourceStatus(str, enum.Enum):
+    """Status of knowledge base source."""
+    ACTIVE = "active"
+    PROCESSING = "processing"
+    ERROR = "error"
+
+
+class Tenant(Base):
+    """
+    Tenant/Client model for multi-tenant architecture.
+    Each client gets isolated configuration and data.
+    """
+    __tablename__ = "tenants"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False, index=True)
+    slug = Column(String, unique=True, nullable=False, index=True)  # Unique identifier
+    is_active = Column(Integer, default=1)  # 0 = inactive, 1 = active
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    configuration = relationship("TenantConfiguration", back_populates="tenant", uselist=False, cascade="all, delete-orphan")
+    knowledge_sources = relationship("KnowledgeBaseSource", back_populates="tenant", cascade="all, delete-orphan")
+    database_connections = relationship("DatabaseConnection", back_populates="tenant", cascade="all, delete-orphan")
+
+
+class TenantConfiguration(Base):
+    """
+    Per-tenant configuration settings.
+    Stores LLM, UI, and operational settings for each tenant.
+    """
+    __tablename__ = "tenant_configurations"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), unique=True, nullable=False, index=True)
+    llm_provider = Column(String, default="ollama")  # ollama, huggingface, etc.
+    llm_model_name = Column(String, default="llama3.2")  # Model name
+    llm_config = Column(JSON, nullable=True)  # API keys, endpoints, parameters
+    embedding_model = Column(String, default="all-MiniLM-L6-v2")  # Embedding model for RAG
+    tone = Column(String, default="professional")  # professional, casual, friendly
+    auto_send_threshold = Column(Float, default=0.65)  # Confidence threshold
+    ui_config = Column(JSON, nullable=True)  # colors, logo_url, brand_name
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    tenant = relationship("Tenant", back_populates="configuration")
+
+
+class KnowledgeBaseSource(Base):
+    """
+    Tracks knowledge base sources per tenant.
+    Supports multiple sources: manual entries, files, databases.
+    """
+    __tablename__ = "knowledge_base_sources"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    source_type = Column(Enum(SourceType), nullable=False, index=True)
+    source_config = Column(JSON, nullable=True)  # File path, DB connection, etc.
+    status = Column(Enum(SourceStatus), default=SourceStatus.ACTIVE, index=True)
+    last_synced_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    tenant = relationship("Tenant", back_populates="knowledge_sources")
+
+
+class DatabaseConnection(Base):
+    """
+    Stores database connections for RAG integration.
+    Encrypted connection strings for security.
+    """
+    __tablename__ = "database_connections"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    connection_name = Column(String, nullable=False)
+    db_type = Column(String, nullable=False)  # postgresql, mysql, sqlite
+    connection_string = Column(Text, nullable=False)  # Encrypted connection string
+    tables_config = Column(JSON, nullable=True)  # Which tables/columns to use
+    is_active = Column(Integer, default=1)  # 0 = inactive, 1 = active
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    tenant = relationship("Tenant", back_populates="database_connections")
+
+
 class Conversation(Base):
     __tablename__ = "conversations"
     
     id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     customer_id = Column(String, index=True)  # Session-based for MVP
     status = Column(Enum(ConversationStatus), default=ConversationStatus.ACTIVE, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -94,11 +195,13 @@ class KnowledgeBase(Base):
     __tablename__ = "knowledge_base"
     
     id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     title = Column(String, nullable=False, index=True)
     content = Column(Text, nullable=False)
     category = Column(String, index=True)
     tags = Column(String)  # Comma-separated for MVP
     embedding = Column(JSON, nullable=True)  # Vector embedding stored as JSON array
+    source_id = Column(Integer, ForeignKey("knowledge_base_sources.id"), nullable=True)  # Link to source
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -111,6 +214,7 @@ class Feedback(Base):
     __tablename__ = "feedback"
     
     id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     conversation_id = Column(Integer, ForeignKey("conversations.id"), index=True)
     message_id = Column(Integer, nullable=True)  # Optional link to specific message
     rating = Column(Enum(FeedbackRating), nullable=False, index=True)
@@ -130,6 +234,7 @@ class Metrics(Base):
     __tablename__ = "metrics"
     
     id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     date = Column(DateTime, default=datetime.utcnow, index=True)
     total_conversations = Column(Integer, default=0)
     resolved_conversations = Column(Integer, default=0)
