@@ -110,6 +110,7 @@ INTERVIEW*.md
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/
+*.png
 
 backend/chroma_db/
 !backend/chroma_db/.gitkeep
