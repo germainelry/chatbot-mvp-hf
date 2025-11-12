@@ -68,13 +68,19 @@ async def create_feedback(
     db.refresh(db_feedback)
     
     # Calculate and save evaluation metrics if agent correction is provided
+    # Note: This is for POST-SEND feedback corrections (alternative/better responses).
+    # PRE-SEND edits (when agent edits before sending) automatically calculate metrics
+    # in the message update endpoint.
     if feedback.agent_correction and feedback.message_id:
         message = db.query(Message).filter(Message.id == feedback.message_id).first()
         if message:
             # Use original AI content if available (for edited messages), otherwise use current content
+            # This ensures we compare against the original AI draft, not the edited version
             ai_response_content = message.original_ai_content if message.original_ai_content else message.content
             
             # Evaluate AI response against agent correction
+            # This allows agents to provide an alternative/better response in feedback
+            # even if they already edited the message before sending
             eval_metrics = evaluate_ai_response(
                 ai_response=ai_response_content,
                 agent_correction=feedback.agent_correction

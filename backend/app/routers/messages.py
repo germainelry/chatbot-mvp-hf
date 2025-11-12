@@ -116,6 +116,10 @@ async def update_message(
     if not message:
         raise HTTPException(status_code=404, detail="Message not found")
     
+    # Track if this is an edit (has original_ai_content and is being changed to agent_edited)
+    is_edit = False
+    original_ai_content = None
+    
     # Update fields if provided
     if update.content is not None:
         message.content = update.content
@@ -125,10 +129,19 @@ async def update_message(
         message.confidence_score = update.confidence_score
     if update.original_ai_content is not None:
         message.original_ai_content = update.original_ai_content
+        original_ai_content = update.original_ai_content
+    elif message.original_ai_content:
+        # Use existing original_ai_content if update doesn't provide it
+        original_ai_content = message.original_ai_content
     if update.intent is not None:
         message.intent = update.intent
     if update.agent_type is not None:
         message.agent_type = update.agent_type
+    
+    # Check if this is an edit: message has original_ai_content and type is agent_edited
+    final_message_type = update.message_type if update.message_type is not None else message.message_type
+    if original_ai_content and final_message_type == MessageType.AGENT_EDITED and message.content:
+        is_edit = True
     
     # Update conversation timestamp
     conversation = db.query(Conversation).filter(
@@ -139,6 +152,30 @@ async def update_message(
     
     db.commit()
     db.refresh(message)
+    
+    # Automatically calculate evaluation metrics when a message is edited
+    if is_edit and original_ai_content and message.content:
+        try:
+            from app.services.evaluation_service import evaluate_ai_response, save_evaluation_metrics
+            
+            # Compare original AI response with agent's edited version
+            eval_metrics = evaluate_ai_response(
+                ai_response=original_ai_content,
+                agent_correction=message.content
+            )
+            
+            # Save evaluation metrics
+            save_evaluation_metrics(
+                message_id=message.id,
+                conversation_id=message.conversation_id,
+                bleu_score=eval_metrics.get("bleu_score"),
+                semantic_similarity=eval_metrics.get("semantic_similarity"),
+                csat_score=None,
+                db=db
+            )
+        except Exception as e:
+            # Don't fail message update if evaluation calculation fails
+            print(f"Failed to calculate evaluation metrics for edited message: {e}")
     
     return message
 
