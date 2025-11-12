@@ -4,7 +4,13 @@
  */
 import axios from 'axios';
 
-const API_BASE_URL = 'http://localhost:8000/api';
+// Get API base URL from environment variable, fallback to localhost for development
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
+
+// Get API key from environment variable (optional - only if intentionally exposing to browser)
+// WARNING: Only use VITE_API_KEY if the API key is meant to be public (e.g., for demo/public APIs)
+// For production, consider using a proxy or server-side authentication instead
+const API_KEY = import.meta.env.VITE_API_KEY;
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -13,8 +19,14 @@ const api = axios.create({
   },
 });
 
-// Add tenant ID to requests
+// Add API key and tenant ID to requests
 api.interceptors.request.use((config) => {
+  // Add API key if provided (required for write operations in production)
+  if (API_KEY) {
+    config.headers['X-API-Key'] = API_KEY;
+  }
+  
+  // Add tenant ID to requests
   const tenantId = localStorage.getItem('tenant_id');
   if (tenantId) {
     config.headers['X-Tenant-ID'] = tenantId;

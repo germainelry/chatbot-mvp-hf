@@ -8,6 +8,8 @@ import Analytics from './pages/Analytics';
 import KnowledgeBase from './pages/KnowledgeBase';
 import Configuration from './pages/Configuration';
 import TenantManagement from './pages/TenantManagement';
+import Contact from './pages/Contact';
+import DemoBanner from './components/DemoBanner';
 import { cn } from './components/ui/utils';
 import { useEffect } from 'react';
 import { getTheme, applyTheme } from './config/theme';
@@ -82,6 +84,7 @@ function App() {
       <div className="min-h-screen bg-background">
         <Navigation />
         <main className="container py-6">
+          <DemoBanner />
           <Routes>
             <Route path="/" element={<CustomerChat />} />
             <Route path="/customer" element={<CustomerChat />} />
@@ -90,6 +93,7 @@ function App() {
             <Route path="/knowledge-base" element={<KnowledgeBase />} />
             <Route path="/configuration" element={<Configuration />} />
             <Route path="/tenants" element={<TenantManagement />} />
+            <Route path="/contact" element={<Contact />} />
           </Routes>
         </main>
         <Toaster position="top-right" richColors />
