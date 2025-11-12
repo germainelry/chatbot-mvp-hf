@@ -11,6 +11,7 @@ import TenantManagement from './pages/TenantManagement';
 import { cn } from './components/ui/utils';
 import { useEffect } from 'react';
 import { getTheme, applyTheme } from './config/theme';
+import { Toaster } from 'sonner';
 
 function Navigation() {
   const location = useLocation();
@@ -91,6 +92,7 @@ function App() {
             <Route path="/tenants" element={<TenantManagement />} />
           </Routes>
         </main>
+        <Toaster position="top-right" richColors />
       </div>
     </Router>
   );

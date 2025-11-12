@@ -2,8 +2,9 @@
  * Configuration Page
  * Manage tenant settings: LLM, Knowledge Base, UI customization, and advanced settings.
  */
-import { useState, useEffect } from 'react';
-import { Brain, Database, Palette, Sliders, Save, TestTube } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Brain, Database, Palette, Sliders, Save, TestTube, Loader2, Upload, FileText, CheckCircle2, AlertCircle, HelpCircle } from 'lucide-react';
+import { toast } from 'sonner';
 import {
   getTenantConfiguration,
   updateTenantConfiguration,
@@ -33,6 +34,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
 import { PageHeader } from '../components/layout/PageHeader';
 import { applyTheme } from '../config/theme';
+import { Progress } from '../components/ui/progress';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip';
 
 const DEFAULT_TENANT_ID = 1; // Default tenant ID
 
@@ -50,8 +53,33 @@ export default function Configuration() {
   const [dbConnections, setDbConnections] = useState<DatabaseConnection[]>([]);
   const [selectedConnection, setSelectedConnection] = useState<number | null>(null);
   const [tables, setTables] = useState<TableInfo[]>([]);
-  const [uploading, setUploading] = useState(false);
+  
+  // Enhanced upload state management
+  const [uploadingPDF, setUploadingPDF] = useState(false);
+  const [uploadingCSV, setUploadingCSV] = useState(false);
+  const [uploadingDocument, setUploadingDocument] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ pdf: number; csv: number; document: number }>({
+    pdf: 0,
+    csv: 0,
+    document: 0,
+  });
+  const [uploadStatus, setUploadStatus] = useState<{ pdf: 'idle' | 'uploading' | 'success' | 'error'; csv: 'idle' | 'uploading' | 'success' | 'error'; document: 'idle' | 'uploading' | 'success' | 'error' }>({
+    pdf: 'idle',
+    csv: 'idle',
+    document: 'idle',
+  });
+  const [selectedFiles, setSelectedFiles] = useState<{ pdf: File | null; csv: File | null; document: File | null }>({
+    pdf: null,
+    csv: null,
+    document: null,
+  });
+  
   const [alert, setAlert] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  
+  // File input refs
+  const pdfInputRef = useRef<HTMLInputElement>(null);
+  const csvInputRef = useRef<HTMLInputElement>(null);
+  const documentInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     loadTenants();
@@ -169,8 +197,34 @@ export default function Configuration() {
     }
   };
 
+  const handleFileSelect = (file: File, type: 'pdf' | 'csv' | 'document') => {
+    setSelectedFiles(prev => ({ ...prev, [type]: file }));
+    setUploadStatus(prev => ({ ...prev, [type]: 'idle' }));
+    // Auto-upload on file selection
+    handleFileUpload(file, type);
+  };
+
   const handleFileUpload = async (file: File, type: 'pdf' | 'csv' | 'document') => {
-    setUploading(true);
+    // Set uploading state for specific type
+    if (type === 'pdf') {
+      setUploadingPDF(true);
+      setUploadStatus(prev => ({ ...prev, pdf: 'uploading' }));
+    } else if (type === 'csv') {
+      setUploadingCSV(true);
+      setUploadStatus(prev => ({ ...prev, csv: 'uploading' }));
+    } else {
+      setUploadingDocument(true);
+      setUploadStatus(prev => ({ ...prev, document: 'uploading' }));
+    }
+    
+    // Simulate progress (since backend doesn't provide progress events)
+    const progressInterval = setInterval(() => {
+      setUploadProgress(prev => ({
+        ...prev,
+        [type]: Math.min(prev[type] + 10, 90),
+      }));
+    }, 200);
+    
     try {
       let result;
       if (type === 'pdf') {
@@ -181,14 +235,64 @@ export default function Configuration() {
         result = await uploadDocument(file);
       }
       
-      setAlert({ type: 'success', message: `${result.articles_created} articles created from ${file.name}` });
-      setTimeout(() => setAlert(null), 3000);
-    } catch (error) {
-      setAlert({ type: 'error', message: `Failed to upload ${file.name}` });
-      setTimeout(() => setAlert(null), 3000);
+      // Complete progress
+      setUploadProgress(prev => ({ ...prev, [type]: 100 }));
+      clearInterval(progressInterval);
+      
+      // Set success state
+      setUploadStatus(prev => ({ ...prev, [type]: 'success' }));
+      
+      // Show toast notification
+      toast.success('Upload Successful', {
+        description: `${result.articles_created} articles created from ${file.name}`,
+      });
+      
+      // Reset after 2 seconds
+      setTimeout(() => {
+        setUploadStatus(prev => ({ ...prev, [type]: 'idle' }));
+        setUploadProgress(prev => ({ ...prev, [type]: 0 }));
+        setSelectedFiles(prev => ({ ...prev, [type]: null }));
+        // Reset file input
+        if (type === 'pdf' && pdfInputRef.current) {
+          pdfInputRef.current.value = '';
+        } else if (type === 'csv' && csvInputRef.current) {
+          csvInputRef.current.value = '';
+        } else if (type === 'document' && documentInputRef.current) {
+          documentInputRef.current.value = '';
+        }
+      }, 2000);
+    } catch (error: any) {
+      clearInterval(progressInterval);
+      setUploadProgress(prev => ({ ...prev, [type]: 0 }));
+      setUploadStatus(prev => ({ ...prev, [type]: 'error' }));
+      
+      // Show error toast
+      toast.error('Upload Failed', {
+        description: error.response?.data?.detail || `Failed to upload ${file.name}`,
+      });
+      
+      // Reset error state after 3 seconds
+      setTimeout(() => {
+        setUploadStatus(prev => ({ ...prev, [type]: 'idle' }));
+        setSelectedFiles(prev => ({ ...prev, [type]: null }));
+      }, 3000);
     } finally {
-      setUploading(false);
+      if (type === 'pdf') {
+        setUploadingPDF(false);
+      } else if (type === 'csv') {
+        setUploadingCSV(false);
+      } else {
+        setUploadingDocument(false);
+      }
     }
+  };
+  
+  const formatFileSize = (bytes: number): string => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
   };
 
   const loadDatabaseConnections = async () => {
@@ -403,46 +507,288 @@ export default function Configuration() {
           <Card>
             <CardHeader>
               <CardTitle>File Upload</CardTitle>
-              <CardDescription>Upload PDF, CSV, or documents to add to knowledge base</CardDescription>
+              <CardDescription>
+                Upload PDF, CSV, or documents to add to your knowledge base. Files are automatically processed and converted into searchable articles.
+              </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-3 gap-4">
-                <div className="space-y-2">
-                  <Label>Upload PDF</Label>
-                  <Input
-                    type="file"
-                    accept=".pdf"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) handleFileUpload(file, 'pdf');
-                    }}
-                    disabled={uploading}
-                  />
+            <CardContent className="space-y-6">
+              <TooltipProvider>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  {/* PDF Upload */}
+                  <div className="space-y-3 border rounded-lg p-4 transition-all hover:border-primary/50">
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="pdf-upload" className="text-base font-semibold flex items-center gap-2">
+                        <FileText className="h-4 w-4 text-red-500" />
+                        Upload PDF
+                      </Label>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p className="max-w-xs">
+                            Upload PDF documents (manuals, guides, reports). The system will extract text and create searchable articles.
+                          </p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      Best for: Manuals, guides, reports, and structured documents
+                    </p>
+                    <input
+                      ref={pdfInputRef}
+                      id="pdf-upload"
+                      type="file"
+                      accept=".pdf"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleFileSelect(file, 'pdf');
+                      }}
+                      disabled={uploadingPDF || uploadingCSV || uploadingDocument}
+                      aria-label="Upload PDF file"
+                    />
+                    <Button
+                      type="button"
+                      variant={uploadStatus.pdf === 'success' ? 'default' : uploadStatus.pdf === 'error' ? 'destructive' : 'outline'}
+                      className="w-full transition-all duration-300 relative overflow-hidden"
+                      onClick={() => pdfInputRef.current?.click()}
+                      disabled={uploadingPDF || uploadingCSV || uploadingDocument}
+                      aria-busy={uploadingPDF}
+                      aria-disabled={uploadingPDF || uploadingCSV || uploadingDocument}
+                    >
+                      {uploadingPDF ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          <span>Uploading...</span>
+                        </>
+                      ) : uploadStatus.pdf === 'success' ? (
+                        <>
+                          <CheckCircle2 className="h-4 w-4 mr-2" />
+                          <span>Upload Complete</span>
+                        </>
+                      ) : uploadStatus.pdf === 'error' ? (
+                        <>
+                          <AlertCircle className="h-4 w-4 mr-2" />
+                          <span>Upload Failed</span>
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="h-4 w-4 mr-2" />
+                          <span>Choose PDF File</span>
+                        </>
+                      )}
+                    </Button>
+                    {selectedFiles.pdf && (
+                      <div className="text-sm text-muted-foreground animate-in fade-in-50">
+                        <p className="truncate font-medium">{selectedFiles.pdf.name}</p>
+                        <p className="text-xs">{formatFileSize(selectedFiles.pdf.size)}</p>
+                      </div>
+                    )}
+                    {uploadingPDF && (
+                      <div className="space-y-1 animate-in fade-in-50">
+                        <Progress value={uploadProgress.pdf} className="h-2" />
+                        <p className="text-xs text-muted-foreground text-center">{uploadProgress.pdf}%</p>
+                      </div>
+                    )}
+                    <div 
+                      className="text-xs text-muted-foreground"
+                      aria-live="polite"
+                      aria-atomic="true"
+                    >
+                      {uploadingPDF && 'Processing your PDF file...'}
+                      {uploadStatus.pdf === 'success' && 'PDF processed successfully!'}
+                      {uploadStatus.pdf === 'error' && 'Failed to process PDF. Please try again.'}
+                    </div>
+                  </div>
+
+                  {/* CSV Upload */}
+                  <div className="space-y-3 border rounded-lg p-4 transition-all hover:border-primary/50">
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="csv-upload" className="text-base font-semibold flex items-center gap-2">
+                        <FileText className="h-4 w-4 text-green-500" />
+                        Upload CSV
+                      </Label>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p className="max-w-xs">
+                            Upload CSV files with structured data. Each row will be converted into a knowledge article. Ensure your CSV has headers.
+                          </p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      Best for: Structured data, FAQs, product catalogs, and tabular information
+                    </p>
+                    <input
+                      ref={csvInputRef}
+                      id="csv-upload"
+                      type="file"
+                      accept=".csv"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleFileSelect(file, 'csv');
+                      }}
+                      disabled={uploadingPDF || uploadingCSV || uploadingDocument}
+                      aria-label="Upload CSV file"
+                    />
+                    <Button
+                      type="button"
+                      variant={uploadStatus.csv === 'success' ? 'default' : uploadStatus.csv === 'error' ? 'destructive' : 'outline'}
+                      className="w-full transition-all duration-300 relative overflow-hidden"
+                      onClick={() => csvInputRef.current?.click()}
+                      disabled={uploadingPDF || uploadingCSV || uploadingDocument}
+                      aria-busy={uploadingCSV}
+                      aria-disabled={uploadingPDF || uploadingCSV || uploadingDocument}
+                    >
+                      {uploadingCSV ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          <span>Uploading...</span>
+                        </>
+                      ) : uploadStatus.csv === 'success' ? (
+                        <>
+                          <CheckCircle2 className="h-4 w-4 mr-2" />
+                          <span>Upload Complete</span>
+                        </>
+                      ) : uploadStatus.csv === 'error' ? (
+                        <>
+                          <AlertCircle className="h-4 w-4 mr-2" />
+                          <span>Upload Failed</span>
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="h-4 w-4 mr-2" />
+                          <span>Choose CSV File</span>
+                        </>
+                      )}
+                    </Button>
+                    {selectedFiles.csv && (
+                      <div className="text-sm text-muted-foreground animate-in fade-in-50">
+                        <p className="truncate font-medium">{selectedFiles.csv.name}</p>
+                        <p className="text-xs">{formatFileSize(selectedFiles.csv.size)}</p>
+                      </div>
+                    )}
+                    {uploadingCSV && (
+                      <div className="space-y-1 animate-in fade-in-50">
+                        <Progress value={uploadProgress.csv} className="h-2" />
+                        <p className="text-xs text-muted-foreground text-center">{uploadProgress.csv}%</p>
+                      </div>
+                    )}
+                    <div 
+                      className="text-xs text-muted-foreground"
+                      aria-live="polite"
+                      aria-atomic="true"
+                    >
+                      {uploadingCSV && 'Processing your CSV file...'}
+                      {uploadStatus.csv === 'success' && 'CSV processed successfully!'}
+                      {uploadStatus.csv === 'error' && 'Failed to process CSV. Please try again.'}
+                    </div>
+                  </div>
+
+                  {/* Document Upload */}
+                  <div className="space-y-3 border rounded-lg p-4 transition-all hover:border-primary/50">
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="document-upload" className="text-base font-semibold flex items-center gap-2">
+                        <FileText className="h-4 w-4 text-blue-500" />
+                        Upload Document
+                      </Label>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p className="max-w-xs">
+                            Upload text documents (.txt, .md, .docx). Markdown files are especially well-supported and preserve formatting.
+                          </p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      Best for: Text files, markdown documents, and Word documents
+                    </p>
+                    <input
+                      ref={documentInputRef}
+                      id="document-upload"
+                      type="file"
+                      accept=".txt,.md,.markdown,.docx"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleFileSelect(file, 'document');
+                      }}
+                      disabled={uploadingPDF || uploadingCSV || uploadingDocument}
+                      aria-label="Upload document file"
+                    />
+                    <Button
+                      type="button"
+                      variant={uploadStatus.document === 'success' ? 'default' : uploadStatus.document === 'error' ? 'destructive' : 'outline'}
+                      className="w-full transition-all duration-300 relative overflow-hidden"
+                      onClick={() => documentInputRef.current?.click()}
+                      disabled={uploadingPDF || uploadingCSV || uploadingDocument}
+                      aria-busy={uploadingDocument}
+                      aria-disabled={uploadingPDF || uploadingCSV || uploadingDocument}
+                    >
+                      {uploadingDocument ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          <span>Uploading...</span>
+                        </>
+                      ) : uploadStatus.document === 'success' ? (
+                        <>
+                          <CheckCircle2 className="h-4 w-4 mr-2" />
+                          <span>Upload Complete</span>
+                        </>
+                      ) : uploadStatus.document === 'error' ? (
+                        <>
+                          <AlertCircle className="h-4 w-4 mr-2" />
+                          <span>Upload Failed</span>
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="h-4 w-4 mr-2" />
+                          <span>Choose Document</span>
+                        </>
+                      )}
+                    </Button>
+                    {selectedFiles.document && (
+                      <div className="text-sm text-muted-foreground animate-in fade-in-50">
+                        <p className="truncate font-medium">{selectedFiles.document.name}</p>
+                        <p className="text-xs">{formatFileSize(selectedFiles.document.size)}</p>
+                      </div>
+                    )}
+                    {uploadingDocument && (
+                      <div className="space-y-1 animate-in fade-in-50">
+                        <Progress value={uploadProgress.document} className="h-2" />
+                        <p className="text-xs text-muted-foreground text-center">{uploadProgress.document}%</p>
+                      </div>
+                    )}
+                    <div 
+                      className="text-xs text-muted-foreground"
+                      aria-live="polite"
+                      aria-atomic="true"
+                    >
+                      {uploadingDocument && 'Processing your document...'}
+                      {uploadStatus.document === 'success' && 'Document processed successfully!'}
+                      {uploadStatus.document === 'error' && 'Failed to process document. Please try again.'}
+                    </div>
+                  </div>
                 </div>
-                <div className="space-y-2">
-                  <Label>Upload CSV</Label>
-                  <Input
-                    type="file"
-                    accept=".csv"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) handleFileUpload(file, 'csv');
-                    }}
-                    disabled={uploading}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Upload Document</Label>
-                  <Input
-                    type="file"
-                    accept=".txt,.md,.docx"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) handleFileUpload(file, 'document');
-                    }}
-                    disabled={uploading}
-                  />
-                </div>
+              </TooltipProvider>
+              
+              <div className="mt-4 p-4 bg-muted/50 rounded-lg border border-dashed">
+                <p className="text-sm font-medium mb-2">File Upload Guidelines:</p>
+                <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
+                  <li>Maximum file size: 10MB per file (recommended)</li>
+                  <li>PDF files should be text-based (not scanned images)</li>
+                  <li>CSV files should include headers in the first row</li>
+                  <li>Documents are automatically chunked into searchable articles</li>
+                  <li>Processing time varies based on file size and complexity</li>
+                </ul>
               </div>
             </CardContent>
           </Card>
