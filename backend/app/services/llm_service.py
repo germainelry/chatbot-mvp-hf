@@ -31,11 +31,11 @@ def search_knowledge_base(query: str, db: Session, tenant_id: Optional[int] = No
     Args:
         query: Search query
         db: Database session
-        tenant_id: Tenant ID for filtering
+        tenant_id: Deprecated - kept for backward compatibility
         embedding_model_name: Name of embedding model to use
     """
     # Use vector search (will fallback to keyword if embeddings unavailable)
-    return search_knowledge_base_vector(query, db, top_k=3, tenant_id=tenant_id, embedding_model_name=embedding_model_name)
+    return search_knowledge_base_vector(query, db, top_k=3, tenant_id=None, embedding_model_name=embedding_model_name)
 
 
 def calculate_confidence_score(matched_articles: List[Dict], query: str) -> float:
@@ -79,15 +79,11 @@ async def generate_ai_response(
         conversation_id: Conversation ID
         user_message: User's message
         db: Database session
-        tenant_id: Tenant ID for configuration lookup
+        tenant_id: Deprecated - kept for backward compatibility
     """
     
-    # Load tenant configuration
-    tenant_config = None
-    if tenant_id:
-        tenant_config = db.query(TenantConfiguration).filter(
-            TenantConfiguration.tenant_id == tenant_id
-        ).first()
+    # Load global configuration
+    tenant_config = db.query(TenantConfiguration).first()
     
     # Get configuration (tenant config > env vars > defaults)
     default_config = get_default_llm_config()
@@ -108,7 +104,7 @@ async def generate_ai_response(
         embedding_model_name = default_config.get("embedding_model")
     
     # Search knowledge base with tenant's embedding model
-    matched_articles = search_knowledge_base(user_message, db, tenant_id=tenant_id, embedding_model_name=embedding_model_name)
+    matched_articles = search_knowledge_base(user_message, db, tenant_id=None, embedding_model_name=embedding_model_name)
     
     # Calculate confidence
     confidence = calculate_confidence_score(matched_articles, user_message)

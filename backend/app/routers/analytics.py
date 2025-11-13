@@ -66,66 +66,64 @@ class TimeSeriesResponse(BaseModel):
 @router.get("/metrics", response_model=MetricsResponse)
 async def get_metrics(db: Session = Depends(get_db)):
     """
-    Calculate key product metrics for AI customer support system.
-    
-    Critical metrics for PM role:
-    - Deflection Rate: % of conversations handled without escalation
+    Calculate key enterprise metrics for AI customer support system.
+
+    OPTIMIZED: Reduced from 9+ queries to 3 queries for faster performance.
+
+    Critical metrics for enterprise AI chatbot:
     - Resolution Rate: % of conversations successfully resolved
+    - Escalation Rate: % requiring human intervention
+    - Deflection Rate: % handled by AI (inverse of escalation)
     - Confidence Scores: AI model quality indicator
     - Feedback Sentiment: Agent satisfaction with AI responses
     """
-    
-    # Total conversations
-    total_convs = db.query(func.count(Conversation.id)).scalar()
-    
-    # Active conversations
-    active_convs = db.query(func.count(Conversation.id)).filter(
-        Conversation.status == ConversationStatus.ACTIVE
-    ).scalar()
-    
-    # Resolved conversations
-    resolved_convs = db.query(func.count(Conversation.id)).filter(
-        Conversation.status == ConversationStatus.RESOLVED
-    ).scalar()
-    
-    # Escalated conversations
-    escalated_convs = db.query(func.count(Conversation.id)).filter(
-        Conversation.status == ConversationStatus.ESCALATED
-    ).scalar()
-    
+
+    # QUERY 1: Single query for all conversation counts by status (was 4 queries)
+    status_counts = db.query(
+        func.count(Conversation.id).label('total'),
+        func.sum(case((Conversation.status == ConversationStatus.ACTIVE, 1), else_=0)).label('active'),
+        func.sum(case((Conversation.status == ConversationStatus.RESOLVED, 1), else_=0)).label('resolved'),
+        func.sum(case((Conversation.status == ConversationStatus.ESCALATED, 1), else_=0)).label('escalated')
+    ).first()
+
+    total_convs = int(status_counts.total or 0)
+    active_convs = int(status_counts.active or 0)
+    resolved_convs = int(status_counts.resolved or 0)
+    escalated_convs = int(status_counts.escalated or 0)
+
     # Calculate rates
     resolution_rate = (resolved_convs / total_convs * 100) if total_convs > 0 else 0
     escalation_rate = (escalated_convs / total_convs * 100) if total_convs > 0 else 0
-    
-    # Average confidence score
+
+    # QUERY 2: Average confidence score
     avg_confidence = db.query(func.avg(Message.confidence_score)).filter(
         Message.confidence_score.isnot(None)
     ).scalar() or 0.0
-    
-    # Feedback metrics
-    total_feedback = db.query(func.count(Feedback.id)).scalar()
-    
-    helpful_feedback = db.query(func.count(Feedback.id)).filter(
-        Feedback.rating == FeedbackRating.HELPFUL
-    ).scalar()
-    
-    not_helpful_feedback = db.query(func.count(Feedback.id)).filter(
-        Feedback.rating == FeedbackRating.NOT_HELPFUL
-    ).scalar()
-    
+
+    # QUERY 3: Single query for all feedback counts (was 3 queries)
+    feedback_counts = db.query(
+        func.count(Feedback.id).label('total'),
+        func.sum(case((Feedback.rating == FeedbackRating.HELPFUL, 1), else_=0)).label('helpful'),
+        func.sum(case((Feedback.rating == FeedbackRating.NOT_HELPFUL, 1), else_=0)).label('not_helpful')
+    ).first()
+
+    total_feedback = int(feedback_counts.total or 0)
+    helpful_feedback = int(feedback_counts.helpful or 0)
+    not_helpful_feedback = int(feedback_counts.not_helpful or 0)
+
     feedback_sentiment = (helpful_feedback / total_feedback * 100) if total_feedback > 0 else 0
-    
+
     return MetricsResponse(
-        total_conversations=total_convs or 0,
-        active_conversations=active_convs or 0,
-        resolved_conversations=resolved_convs or 0,
-        escalated_conversations=escalated_convs or 0,
+        total_conversations=total_convs,
+        active_conversations=active_convs,
+        resolved_conversations=resolved_convs,
+        escalated_conversations=escalated_convs,
         resolution_rate=round(resolution_rate, 2),
         escalation_rate=round(escalation_rate, 2),
         avg_confidence_score=round(avg_confidence, 2),
-        total_feedback=total_feedback or 0,
-        helpful_feedback=helpful_feedback or 0,
-        not_helpful_feedback=not_helpful_feedback or 0,
+        total_feedback=total_feedback,
+        helpful_feedback=helpful_feedback,
+        not_helpful_feedback=not_helpful_feedback,
         feedback_sentiment=round(feedback_sentiment, 2)
     )
 
@@ -192,60 +190,74 @@ async def get_time_series_metrics(
     # Generate all dates in range (to fill gaps)
     date_list = [start_date + timedelta(days=x) for x in range(actual_days)]
     
-    # Get daily conversation counts - get all conversations and filter by date range
-    # This avoids timezone issues with date casting
-    all_convs = db.query(Conversation).all()
+    # Convert dates to datetime for SQL comparison
+    start_datetime = datetime.combine(start_date, datetime.min.time())
+    end_datetime = datetime.combine(end_date, datetime.max.time())
     
-    # Group by date (using UTC date to match created_at)
-    conv_dict = {}
-    for conv in all_convs:
-        conv_date = conv.created_at.date() if isinstance(conv.created_at, datetime) else conv.created_at
-        # Only include if within our date range
-        if start_date <= conv_date <= end_date:
-            if conv_date not in conv_dict:
-                conv_dict[conv_date] = {'total': 0, 'resolved': 0, 'escalated': 0}
-            conv_dict[conv_date]['total'] += 1
-            if conv.status == ConversationStatus.RESOLVED:
-                conv_dict[conv_date]['resolved'] += 1
-            elif conv.status == ConversationStatus.ESCALATED:
-                conv_dict[conv_date]['escalated'] += 1
-    
-    # Get daily average confidence scores - process all messages
-    all_messages = db.query(Message).filter(
-        Message.confidence_score.isnot(None)
+    # Get daily conversation counts using SQL aggregation
+    # Filter by date range at database level and group by date
+    conv_counts = db.query(
+        func.date(Conversation.created_at).label('date'),
+        func.count(Conversation.id).label('total'),
+        func.sum(case((Conversation.status == ConversationStatus.RESOLVED, 1), else_=0)).label('resolved'),
+        func.sum(case((Conversation.status == ConversationStatus.ESCALATED, 1), else_=0)).label('escalated')
+    ).filter(
+        Conversation.created_at >= start_datetime,
+        Conversation.created_at < end_datetime + timedelta(days=1)
+    ).group_by(
+        func.date(Conversation.created_at)
     ).all()
     
-    # Group by date and calculate averages
-    confidence_by_date = {}
-    for msg in all_messages:
-        msg_date = msg.created_at.date() if isinstance(msg.created_at, datetime) else msg.created_at
-        if start_date <= msg_date <= end_date:
-            if msg_date not in confidence_by_date:
-                confidence_by_date[msg_date] = []
-            confidence_by_date[msg_date].append(msg.confidence_score)
+    # Build conversation dictionary from SQL results
+    conv_dict = {}
+    for row in conv_counts:
+        conv_date = row.date if isinstance(row.date, date) else row.date.date()
+        conv_dict[conv_date] = {
+            'total': row.total or 0,
+            'resolved': int(row.resolved or 0),
+            'escalated': int(row.escalated or 0)
+        }
     
-    # Calculate averages
-    confidence_dict = {
-        date: sum(scores) / len(scores) if scores else 0.0
-        for date, scores in confidence_by_date.items()
-    }
+    # Get daily average confidence scores using SQL aggregation
+    confidence_avg = db.query(
+        func.date(Message.created_at).label('date'),
+        func.avg(Message.confidence_score).label('avg_confidence')
+    ).filter(
+        Message.confidence_score.isnot(None),
+        Message.created_at >= start_datetime,
+        Message.created_at < end_datetime + timedelta(days=1)
+    ).group_by(
+        func.date(Message.created_at)
+    ).all()
     
-    # Get daily feedback counts - process all feedback
-    all_feedback = db.query(Feedback).all()
+    # Build confidence dictionary from SQL results
+    confidence_dict = {}
+    for row in confidence_avg:
+        conf_date = row.date if isinstance(row.date, date) else row.date.date()
+        confidence_dict[conf_date] = float(row.avg_confidence or 0.0)
     
-    # Group by date
+    # Get daily feedback counts using SQL aggregation
+    feedback_counts = db.query(
+        func.date(Feedback.created_at).label('date'),
+        func.sum(case((Feedback.rating == FeedbackRating.HELPFUL, 1), else_=0)).label('helpful'),
+        func.sum(case((Feedback.rating == FeedbackRating.NOT_HELPFUL, 1), else_=0)).label('not_helpful'),
+        func.sum(case((Feedback.rating == FeedbackRating.NEEDS_IMPROVEMENT, 1), else_=0)).label('needs_improvement')
+    ).filter(
+        Feedback.created_at >= start_datetime,
+        Feedback.created_at < end_datetime + timedelta(days=1)
+    ).group_by(
+        func.date(Feedback.created_at)
+    ).all()
+    
+    # Build feedback dictionary from SQL results
     feedback_dict = {}
-    for fb in all_feedback:
-        fb_date = fb.created_at.date() if isinstance(fb.created_at, datetime) else fb.created_at
-        if start_date <= fb_date <= end_date:
-            if fb_date not in feedback_dict:
-                feedback_dict[fb_date] = {'helpful': 0, 'not_helpful': 0, 'needs_improvement': 0}
-            if fb.rating == FeedbackRating.HELPFUL:
-                feedback_dict[fb_date]['helpful'] += 1
-            elif fb.rating == FeedbackRating.NOT_HELPFUL:
-                feedback_dict[fb_date]['not_helpful'] += 1
-            elif fb.rating == FeedbackRating.NEEDS_IMPROVEMENT:
-                feedback_dict[fb_date]['needs_improvement'] += 1
+    for row in feedback_counts:
+        fb_date = row.date if isinstance(row.date, date) else row.date.date()
+        feedback_dict[fb_date] = {
+            'helpful': int(row.helpful or 0),
+            'not_helpful': int(row.not_helpful or 0),
+            'needs_improvement': int(row.needs_improvement or 0)
+        }
     
     # Build response with all dates (filling gaps with zeros)
     metrics = []

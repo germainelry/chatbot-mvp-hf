@@ -66,37 +66,32 @@ class SourceStatus(str, enum.Enum):
     ERROR = "error"
 
 
-class Tenant(Base):
-    """
-    Tenant/Client model for multi-tenant architecture.
-    Each client gets isolated configuration and data.
-    """
-    __tablename__ = "tenants"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, nullable=False, index=True)
-    slug = Column(String, unique=True, nullable=False, index=True)  # Unique identifier
-    is_active = Column(Integer, default=1)  # 0 = inactive, 1 = active
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Relationships
-    configuration = relationship("TenantConfiguration", back_populates="tenant", uselist=False, cascade="all, delete-orphan")
-    knowledge_sources = relationship("KnowledgeBaseSource", back_populates="tenant", cascade="all, delete-orphan")
-    database_connections = relationship("DatabaseConnection", back_populates="tenant", cascade="all, delete-orphan")
+# Tenant model removed - no longer using multi-tenant architecture
+# class Tenant(Base):
+#     """
+#     Tenant/Client model for multi-tenant architecture.
+#     Each client gets isolated configuration and data.
+#     """
+#     __tablename__ = "tenants"
+#     
+#     id = Column(Integer, primary_key=True, index=True)
+#     name = Column(String, nullable=False, index=True)
+#     slug = Column(String, unique=True, nullable=False, index=True)  # Unique identifier
+#     is_active = Column(Integer, default=1)  # 0 = inactive, 1 = active
+#     created_at = Column(DateTime, default=datetime.utcnow)
+#     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class TenantConfiguration(Base):
     """
-    Per-tenant configuration settings.
-    Stores LLM, UI, and operational settings for each tenant.
+    Global configuration settings.
+    Stores LLM, UI, and operational settings.
     """
     __tablename__ = "tenant_configurations"
     
     id = Column(Integer, primary_key=True, index=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), unique=True, nullable=False, index=True)
-    llm_provider = Column(String, default="ollama")  # ollama, huggingface, etc.
-    llm_model_name = Column(String, default="llama3.2")  # Model name
+    llm_provider = Column(String, default="ollama")  # Fallback default; actual defaults come from get_default_llm_config()
+    llm_model_name = Column(String, default="llama3.2")  # Fallback default; actual defaults come from get_default_llm_config()
     llm_config = Column(JSON, nullable=True)  # API keys, endpoints, parameters
     embedding_model = Column(String, default="all-MiniLM-L6-v2")  # Embedding model for RAG
     tone = Column(String, default="professional")  # professional, casual, friendly
@@ -104,59 +99,30 @@ class TenantConfiguration(Base):
     ui_config = Column(JSON, nullable=True)  # colors, logo_url, brand_name
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Relationships
-    tenant = relationship("Tenant", back_populates="configuration")
 
 
 class KnowledgeBaseSource(Base):
     """
-    Tracks knowledge base sources per tenant.
+    Tracks knowledge base sources.
     Supports multiple sources: manual entries, files, databases.
     """
     __tablename__ = "knowledge_base_sources"
     
     id = Column(Integer, primary_key=True, index=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
-    source_type = Column(Enum(SourceType), nullable=False, index=True)
+    source_type = Column(Enum(SourceType, values_callable=lambda x: [e.value for e in x]), nullable=False, index=True)
     source_config = Column(JSON, nullable=True)  # File path, DB connection, etc.
-    status = Column(Enum(SourceStatus), default=SourceStatus.ACTIVE, index=True)
+    status = Column(Enum(SourceStatus, values_callable=lambda x: [e.value for e in x]), default=SourceStatus.ACTIVE, index=True)
     last_synced_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Relationships
-    tenant = relationship("Tenant", back_populates="knowledge_sources")
-
-
-class DatabaseConnection(Base):
-    """
-    Stores database connections for RAG integration.
-    Encrypted connection strings for security.
-    """
-    __tablename__ = "database_connections"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
-    connection_name = Column(String, nullable=False)
-    db_type = Column(String, nullable=False)  # postgresql, mysql, sqlite
-    connection_string = Column(Text, nullable=False)  # Encrypted connection string
-    tables_config = Column(JSON, nullable=True)  # Which tables/columns to use
-    is_active = Column(Integer, default=1)  # 0 = inactive, 1 = active
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Relationships
-    tenant = relationship("Tenant", back_populates="database_connections")
 
 
 class Conversation(Base):
     __tablename__ = "conversations"
     
     id = Column(Integer, primary_key=True, index=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     customer_id = Column(String, index=True)  # Session-based for MVP
-    status = Column(Enum(ConversationStatus), default=ConversationStatus.ACTIVE, index=True)
+    status = Column(Enum(ConversationStatus, values_callable=lambda x: [e.value for e in x]), default=ConversationStatus.ACTIVE, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     resolved_at = Column(DateTime, nullable=True)
@@ -174,7 +140,7 @@ class Message(Base):
     id = Column(Integer, primary_key=True, index=True)
     conversation_id = Column(Integer, ForeignKey("conversations.id"), index=True)
     content = Column(Text, nullable=False)
-    message_type = Column(Enum(MessageType), nullable=False, index=True)
+    message_type = Column(Enum(MessageType, values_callable=lambda x: [e.value for e in x]), nullable=False, index=True)
     confidence_score = Column(Float, nullable=True)  # AI confidence (0-1)
     intent = Column(String, nullable=True, index=True)  # Intent classification result
     agent_type = Column(String, nullable=True, index=True)  # Which agent handled this message
@@ -195,7 +161,6 @@ class KnowledgeBase(Base):
     __tablename__ = "knowledge_base"
     
     id = Column(Integer, primary_key=True, index=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     title = Column(String, nullable=False, index=True)
     content = Column(Text, nullable=False)
     category = Column(String, index=True)
@@ -214,10 +179,9 @@ class Feedback(Base):
     __tablename__ = "feedback"
     
     id = Column(Integer, primary_key=True, index=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     conversation_id = Column(Integer, ForeignKey("conversations.id"), index=True)
     message_id = Column(Integer, nullable=True)  # Optional link to specific message
-    rating = Column(Enum(FeedbackRating), nullable=False, index=True)
+    rating = Column(Enum(FeedbackRating, values_callable=lambda x: [e.value for e in x]), nullable=False, index=True)
     agent_correction = Column(Text, nullable=True)  # What agent would have said instead
     notes = Column(Text, nullable=True)  # Additional agent comments
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -234,7 +198,6 @@ class Metrics(Base):
     __tablename__ = "metrics"
     
     id = Column(Integer, primary_key=True, index=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     date = Column(DateTime, default=datetime.utcnow, index=True)
     total_conversations = Column(Integer, default=0)
     resolved_conversations = Column(Integer, default=0)

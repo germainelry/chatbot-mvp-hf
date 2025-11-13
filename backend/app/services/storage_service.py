@@ -46,7 +46,6 @@ def get_supabase_client() -> Optional[object]:
 async def upload_file_to_supabase(
     file: UploadFile,
     bucket_name: str,
-    tenant_id: Optional[int] = None,
     folder: Optional[str] = None,
     use_signed_url: bool = True
 ) -> Optional[str]:
@@ -56,7 +55,6 @@ async def upload_file_to_supabase(
     Args:
         file: FastAPI UploadFile object
         bucket_name: Name of the storage bucket
-        tenant_id: Optional tenant ID for folder organization
         folder: Optional folder path within bucket
         use_signed_url: If True, generate signed URL (for private buckets). If False, use public URL (for public buckets).
     
@@ -70,13 +68,18 @@ async def upload_file_to_supabase(
     if not client:
         raise Exception("Supabase client not configured. Set SUPABASE_URL and SUPABASE_KEY environment variables.")
     
-    # Build file path
+    # Build file path (without tenant_id)
     file_path_parts = []
-    if tenant_id:
-        file_path_parts.append(f"tenant_{tenant_id}")
     if folder:
         file_path_parts.append(folder)
-    file_path_parts.append(file.filename)
+    # Add timestamp to filename to avoid conflicts
+    import time
+    filename_parts = file.filename.rsplit('.', 1)
+    if len(filename_parts) == 2:
+        filename = f"{filename_parts[0]}_{int(time.time())}.{filename_parts[1]}"
+    else:
+        filename = f"{file.filename}_{int(time.time())}"
+    file_path_parts.append(filename)
     file_path = "/".join(file_path_parts)
     
     # Read file content

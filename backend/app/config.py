@@ -2,24 +2,40 @@
 Configuration management for the application.
 Loads defaults from environment variables and allows tenant-specific overrides.
 """
+import logging
 import os
 import sys
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 
 def validate_required_env_vars():
     """
     Validate required environment variables on startup.
-    Fails fast if critical variables are missing in production.
+    Fails fast if critical variables are missing.
     """
     is_production = os.getenv("RAILWAY_ENVIRONMENT") == "production" or os.getenv("ENVIRONMENT") == "production"
     
+    # DATABASE_URL is required in all environments (local dev and production)
+    if not os.getenv("DATABASE_URL"):
+        print("ERROR: DATABASE_URL environment variable is required in all environments.")
+        print("Set it to your Supabase PostgreSQL connection string.")
+        sys.exit(1)
+    
+    # Validate DATABASE_URL is PostgreSQL
+    database_url = os.getenv("DATABASE_URL", "")
+    if not (database_url.startswith("postgresql://") or database_url.startswith("postgres://")):
+        print("ERROR: DATABASE_URL must be a PostgreSQL connection string (starting with postgresql:// or postgres://)")
+        print("SQLite is no longer supported. Please use Supabase PostgreSQL for all environments.")
+        sys.exit(1)
+    
     if is_production:
-        required_vars = ["DATABASE_URL", "API_KEY", "FRONTEND_URL"]
+        required_vars = ["API_KEY", "FRONTEND_URL"]
         missing_vars = [var for var in required_vars if not os.getenv(var)]
         
         if missing_vars:
@@ -54,20 +70,28 @@ def validate_required_env_vars():
 validate_required_env_vars()
 
 
+
+
 def get_default_llm_config() -> Dict:
     """
-    Get default LLM configuration from environment variables.
+    Get default LLM configuration using HuggingFace Inference API.
+    API key is required for all providers.
     
     Returns:
         Dictionary with default LLM settings
     """
+    # Use HuggingFace Inference API with default model
+    default_model = os.getenv("DEFAULT_LLM_MODEL", "mistralai/Mistral-7B-Instruct-v0.2")
+    logger.info(f"Default LLM: HuggingFace Inference ({default_model})")
+    
     return {
-        "provider": os.getenv("DEFAULT_LLM_PROVIDER", "ollama"),
-        "model": os.getenv("DEFAULT_LLM_MODEL", "llama3.2"),
-        "base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+        "provider": os.getenv("DEFAULT_LLM_PROVIDER", "huggingface_inference"),
+        "model": default_model,
+        "base_url": None,
+        "api_key": None,  # Required - must be provided by user
         "embedding_model": os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2"),
         "auto_send_threshold": float(os.getenv("AUTO_SEND_THRESHOLD", "0.65")),
-        "tone": os.getenv("DEFAULT_TONE", "professional"),
+        "tone": os.getenv("DEFAULT_TONE", "professional")
     }
 
 

@@ -2,7 +2,7 @@
 Conversation management endpoints.
 Handles customer conversation lifecycle and status management.
 """
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from pydantic import BaseModel
@@ -10,7 +10,6 @@ from datetime import datetime
 
 from app.database import get_db
 from app.models import Conversation, ConversationStatus, Message
-from app.middleware.tenant_middleware import get_tenant_id_from_request
 from app.middleware.auth import require_api_key
 
 router = APIRouter()
@@ -53,18 +52,12 @@ class ConversationResponse(BaseModel):
 
 @router.post("", response_model=ConversationResponse)
 async def create_conversation(
-    request: Request,
     conversation: ConversationCreate,
     db: Session = Depends(get_db),
     api_key: str = Depends(require_api_key)
 ):
     """Create a new customer conversation."""
-    tenant_id = get_tenant_id_from_request(request)
-    if not tenant_id:
-        raise HTTPException(status_code=400, detail="Tenant ID required")
-    
     db_conversation = Conversation(
-        tenant_id=tenant_id,
         customer_id=conversation.customer_id,
         status=ConversationStatus.ACTIVE
     )
@@ -86,27 +79,41 @@ async def create_conversation(
 
 @router.get("", response_model=List[ConversationResponse])
 async def get_conversations(
-    request: Request,
     status: Optional[ConversationStatus] = None,
+    customer_id: Optional[str] = None,
     limit: int = 50,
+    offset: int = 0,
     db: Session = Depends(get_db)
 ):
-    """Get all conversations with optional status filter."""
-    tenant_id = get_tenant_id_from_request(request)
-    if not tenant_id:
-        raise HTTPException(status_code=400, detail="Tenant ID required")
-    
-    query = db.query(Conversation).filter(Conversation.tenant_id == tenant_id)
+    """Get all conversations with optional status and customer_id filters."""
+    query = db.query(Conversation)
     
     if status:
         query = query.filter(Conversation.status == status)
     
-    conversations = query.order_by(Conversation.updated_at.desc()).limit(limit).all()
+    if customer_id:
+        query = query.filter(Conversation.customer_id == customer_id)
+    
+    conversations = query.order_by(Conversation.updated_at.desc()).offset(offset).limit(limit).all()
+    
+    # Optimize: Batch load messages for all conversations to avoid N+1 queries
+    conversation_ids = [conv.id for conv in conversations]
+    messages_by_conv = {}
+    if conversation_ids:
+        all_messages = db.query(Message).filter(
+            Message.conversation_id.in_(conversation_ids)
+        ).order_by(Message.created_at).all()
+        
+        # Group messages by conversation_id
+        for msg in all_messages:
+            if msg.conversation_id not in messages_by_conv:
+                messages_by_conv[msg.conversation_id] = []
+            messages_by_conv[msg.conversation_id].append(msg)
     
     # Enrich with message count and last message
     result = []
     for conv in conversations:
-        messages = db.query(Message).filter(Message.conversation_id == conv.id).all()
+        messages = messages_by_conv.get(conv.id, [])
         last_msg = messages[-1].content if messages else None
         
         result.append(ConversationResponse(
@@ -125,18 +132,12 @@ async def get_conversations(
 
 @router.get("/{conversation_id}", response_model=ConversationResponse)
 async def get_conversation(
-    request: Request,
     conversation_id: int,
     db: Session = Depends(get_db)
 ):
     """Get a specific conversation by ID."""
-    tenant_id = get_tenant_id_from_request(request)
-    if not tenant_id:
-        raise HTTPException(status_code=400, detail="Tenant ID required")
-    
     conversation = db.query(Conversation).filter(
-        Conversation.id == conversation_id,
-        Conversation.tenant_id == tenant_id
+        Conversation.id == conversation_id
     ).first()
     
     if not conversation:
@@ -163,7 +164,10 @@ async def get_conversation_messages(
     db: Session = Depends(get_db)
 ):
     """Get all messages for a conversation."""
-    conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    # Verify conversation exists
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id
+    ).first()
     
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -183,7 +187,10 @@ async def update_conversation(
     api_key: str = Depends(require_api_key)
 ):
     """Update conversation status (e.g., resolve, escalate)."""
-    conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    # Verify conversation exists
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id
+    ).first()
     
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")

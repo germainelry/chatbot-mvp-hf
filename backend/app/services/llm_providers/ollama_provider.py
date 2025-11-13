@@ -85,20 +85,54 @@ class OllamaProvider(LLMProvider):
     def is_available(self) -> bool:
         """
         Check if Ollama is available.
+        Returns True if available, False otherwise.
+        For detailed information, use get_availability_info().
         """
-        if not OLLAMA_AVAILABLE:
-            return False
+        available, _ = self.get_availability_info()
+        return available
+    
+    def get_availability_info(self) -> tuple[bool, str]:
+        """
+        Check Ollama with detailed setup guidance.
+        Returns tuple of (is_available, message).
+        """
+        from app.config import is_cloud_environment
         
-        # Try to list models to verify connection
+        if not OLLAMA_AVAILABLE:
+            return (False, 
+                    "❌ Ollama Python package not installed.\n"
+                    "Install with: pip install ollama")
+        
+        # Check for cloud environment
+        if is_cloud_environment() and ("localhost" in self.base_url or "127.0.0.1" in self.base_url):
+            return (False, 
+                    "❌ Ollama requires localhost and won't work in cloud deployments.\n"
+                    "💡 Try HuggingFace Inference instead (free, no setup):\n"
+                    "   1. Select 'HuggingFace Inference API' as provider\n"
+                    "   2. Choose a free model (Mistral 7B recommended)\n"
+                    "   3. Test connection - works immediately!")
+        
+        # Try to connect and list models
         try:
-            if self.base_url and self.base_url != "http://localhost:11434":
-                client = ollama.Client(host=self.base_url)
-                client.list()  # Test connection
-            else:
-                ollama.list()  # Test connection
-            return True
-        except:
-            return False
+            import requests
+            response = requests.get(f"{self.base_url}/api/tags", timeout=5)
+            if response.ok:
+                models = response.json().get("models", [])
+                if not models:
+                    return (False, 
+                            "⚠️ Ollama is running but no models installed.\n"
+                            "Run: ollama pull llama3.2")
+                return (True, f"✅ Ollama running with {len(models)} model(s)")
+            return (False, f"⚠️ Ollama returned status {response.status_code}")
+        except requests.exceptions.ConnectionError:
+            return (False, 
+                    "❌ Can't connect to Ollama. Setup needed:\n"
+                    "   1. Install from https://ollama.ai/download\n"
+                    "   2. Start service: ollama serve\n"
+                    "   3. Pull a model: ollama pull llama3.2\n"
+                    "   4. Test connection again")
+        except Exception as e:
+            return (False, f"❌ Error: {str(e)}")
     
     def get_provider_name(self) -> str:
         return "ollama"

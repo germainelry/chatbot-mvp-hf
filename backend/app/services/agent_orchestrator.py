@@ -19,6 +19,12 @@ async def orchestrate_response(
     """
     Main orchestration function.
     Routes user message through router → knowledge/escalation agent.
+    
+    Args:
+        conversation_id: Conversation ID
+        user_message: User's message
+        db: Database session
+        tenant_id: Deprecated - kept for backward compatibility
     """
     # Step 1: Router classifies intent
     intent_result = classify_intent(user_message)
@@ -45,7 +51,7 @@ async def orchestrate_response(
             user_message=user_message,
             conversation_id=conversation_id,
             db=db,
-            tenant_id=tenant_id
+            tenant_id=None
         )
         result["intent"] = intent
         result["intent_confidence"] = confidence
@@ -57,7 +63,7 @@ async def orchestrate_response(
             user_message=user_message,
             conversation_id=conversation_id,
             db=db,
-            tenant_id=tenant_id
+            tenant_id=None
         )
         # Lower confidence threshold for technical support
         if result["confidence_score"] < 0.6:
@@ -78,7 +84,7 @@ async def orchestrate_response(
         user_message=user_message,
         conversation_id=conversation_id,
         db=db,
-        tenant_id=tenant_id
+        tenant_id=None
     )
     result["intent"] = intent
     result["intent_confidence"] = confidence

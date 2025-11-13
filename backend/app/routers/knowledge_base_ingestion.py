@@ -15,16 +15,10 @@ from app.models import KnowledgeBase, KnowledgeBaseSource, SourceType, SourceSta
 from app.services.document_processor import process_document
 from app.services.rag_service import add_article_to_vector_db
 from app.services.storage_service import upload_file_to_supabase, get_supabase_client
-from app.middleware.tenant_middleware import get_tenant_id_from_request
 from app.middleware.auth import require_api_key
-from fastapi import Request
 import tempfile
 
 router = APIRouter()
-
-# File upload directory
-UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads")
-os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 class UploadResponse(BaseModel):
@@ -35,51 +29,37 @@ class UploadResponse(BaseModel):
 
 @router.post("/upload/pdf", response_model=UploadResponse)
 async def upload_pdf(
-    request: Request,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     api_key: str = Depends(require_api_key)
 ):
     """Upload and process PDF file."""
-    tenant_id = get_tenant_id_from_request(request)
-    if not tenant_id:
-        raise HTTPException(status_code=400, detail="Tenant ID required")
-    
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="File must be a PDF")
     
-    # Upload to Supabase Storage if configured, otherwise use local filesystem
+    # Upload to Supabase Storage (required - no local fallback)
     file_url = None
     file_path = None
+    source = None
     
-    supabase_client = get_supabase_client()
-    if supabase_client:
-        try:
-            # Upload to Supabase Storage
-            file_url = await upload_file_to_supabase(
-                file=file,
-                bucket_name="knowledge-base-files",
-                tenant_id=tenant_id,
-                folder="pdfs"
-            )
-            # Reset file pointer for processing
-            await file.seek(0)
-            # Use temporary file for processing
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-                shutil.copyfileobj(file.file, tmp_file)
-                file_path = tmp_file.name
-        except Exception as e:
-            print(f"Error uploading to Supabase, falling back to local storage: {e}")
-            # Fall back to local storage
-            file_path = os.path.join(UPLOAD_DIR, f"{tenant_id}_{file.filename}")
-            with open(file_path, "wb") as buffer:
-                await file.seek(0)
-                shutil.copyfileobj(file.file, buffer)
-    else:
-        # Use local filesystem
-        file_path = os.path.join(UPLOAD_DIR, f"{tenant_id}_{file.filename}")
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+    try:
+        # Upload to Supabase Storage
+        file_url = await upload_file_to_supabase(
+            file=file,
+            bucket_name="knowledge-base-files",
+            folder="pdfs"
+        )
+        # Reset file pointer for processing
+        await file.seek(0)
+        # Use temporary file for processing only
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+            shutil.copyfileobj(file.file, tmp_file)
+            file_path = tmp_file.name
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to upload file to Supabase Storage. Please ensure SUPABASE_URL and SUPABASE_KEY are configured. Error: {str(e)}"
+        )
     
     try:
         # Process PDF
@@ -88,11 +68,9 @@ async def upload_pdf(
         # Create knowledge base source
         source_config = {
             "filename": file.filename,
-            "file_path": file_path if not file_url else None,
             "file_url": file_url
         }
         source = KnowledgeBaseSource(
-            tenant_id=tenant_id,
             source_type=SourceType.PDF,
             source_config=source_config,
             status=SourceStatus.PROCESSING
@@ -105,7 +83,6 @@ async def upload_pdf(
         articles_created = 0
         for article_data in articles:
             kb_article = KnowledgeBase(
-                tenant_id=tenant_id,
                 title=article_data["title"],
                 content=article_data["content"],
                 category=article_data["category"],
@@ -116,7 +93,7 @@ async def upload_pdf(
             db.flush()
             
             # Generate embedding
-            add_article_to_vector_db(kb_article.id, kb_article.title, kb_article.content, db, tenant_id=tenant_id)
+            add_article_to_vector_db(kb_article.id, kb_article.title, kb_article.content, db)
             articles_created += 1
         
         # Update source status
@@ -133,7 +110,7 @@ async def upload_pdf(
         if source:
             source.status = SourceStatus.ERROR
             db.commit()
-        # Clean up temporary file if used
+        # Clean up temporary file
         if file_path and file_path.startswith(tempfile.gettempdir()):
             try:
                 os.unlink(file_path)
@@ -144,23 +121,37 @@ async def upload_pdf(
 
 @router.post("/upload/csv", response_model=UploadResponse)
 async def upload_csv(
-    request: Request,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     api_key: str = Depends(require_api_key)
 ):
     """Upload and process CSV file."""
-    tenant_id = get_tenant_id_from_request(request)
-    if not tenant_id:
-        raise HTTPException(status_code=400, detail="Tenant ID required")
-    
     if not file.filename.endswith('.csv'):
         raise HTTPException(status_code=400, detail="File must be a CSV")
     
-    # Save file
-    file_path = os.path.join(UPLOAD_DIR, f"{tenant_id}_{file.filename}")
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    # Upload to Supabase Storage (required - no local fallback)
+    file_url = None
+    file_path = None
+    source = None
+    
+    try:
+        # Upload to Supabase Storage
+        file_url = await upload_file_to_supabase(
+            file=file,
+            bucket_name="knowledge-base-files",
+            folder="csvs"
+        )
+        # Reset file pointer for processing
+        await file.seek(0)
+        # Use temporary file for processing only
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp_file:
+            shutil.copyfileobj(file.file, tmp_file)
+            file_path = tmp_file.name
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to upload file to Supabase Storage. Please ensure SUPABASE_URL and SUPABASE_KEY are configured. Error: {str(e)}"
+        )
     
     try:
         # Process CSV
@@ -168,9 +159,8 @@ async def upload_csv(
         
         # Create knowledge base source
         source = KnowledgeBaseSource(
-            tenant_id=tenant_id,
             source_type=SourceType.CSV,
-            source_config={"file_path": file_path, "filename": file.filename},
+            source_config={"file_url": file_url, "filename": file.filename},
             status=SourceStatus.PROCESSING
         )
         db.add(source)
@@ -181,7 +171,6 @@ async def upload_csv(
         articles_created = 0
         for article_data in articles:
             kb_article = KnowledgeBase(
-                tenant_id=tenant_id,
                 title=article_data["title"],
                 content=article_data["content"],
                 category=article_data["category"],
@@ -192,7 +181,7 @@ async def upload_csv(
             db.flush()
             
             # Generate embedding
-            add_article_to_vector_db(kb_article.id, kb_article.title, kb_article.content, db, tenant_id=tenant_id)
+            add_article_to_vector_db(kb_article.id, kb_article.title, kb_article.content, db)
             articles_created += 1
         
         # Update source status
@@ -200,39 +189,67 @@ async def upload_csv(
         source.last_synced_at = datetime.utcnow()
         db.commit()
         
+        # Clean up temporary file
+        if file_path and file_path.startswith(tempfile.gettempdir()):
+            try:
+                os.unlink(file_path)
+            except:
+                pass
+        
         return UploadResponse(
             message=f"CSV processed successfully",
             articles_created=articles_created,
             source_id=source.id
         )
     except Exception as e:
-        source.status = SourceStatus.ERROR
-        db.commit()
+        if source:
+            source.status = SourceStatus.ERROR
+            db.commit()
+        # Clean up temporary file
+        if file_path and file_path.startswith(tempfile.gettempdir()):
+            try:
+                os.unlink(file_path)
+            except:
+                pass
         raise HTTPException(status_code=500, detail=f"Error processing CSV: {str(e)}")
 
 
 @router.post("/upload/document", response_model=UploadResponse)
 async def upload_document(
-    request: Request,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     api_key: str = Depends(require_api_key)
 ):
     """Upload and process text document (.txt, .md, .docx)."""
-    tenant_id = get_tenant_id_from_request(request)
-    if not tenant_id:
-        raise HTTPException(status_code=400, detail="Tenant ID required")
-    
     allowed_extensions = ['.txt', '.md', '.markdown', '.docx']
     file_ext = os.path.splitext(file.filename)[1].lower()
     
     if file_ext not in allowed_extensions:
         raise HTTPException(status_code=400, detail=f"File must be one of: {', '.join(allowed_extensions)}")
     
-    # Save file
-    file_path = os.path.join(UPLOAD_DIR, f"{tenant_id}_{file.filename}")
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    # Upload to Supabase Storage (required - no local fallback)
+    file_url = None
+    file_path = None
+    source = None
+    
+    try:
+        # Upload to Supabase Storage
+        file_url = await upload_file_to_supabase(
+            file=file,
+            bucket_name="knowledge-base-files",
+            folder="documents"
+        )
+        # Reset file pointer for processing
+        await file.seek(0)
+        # Use temporary file for processing only
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
+            shutil.copyfileobj(file.file, tmp_file)
+            file_path = tmp_file.name
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to upload file to Supabase Storage. Please ensure SUPABASE_URL and SUPABASE_KEY are configured. Error: {str(e)}"
+        )
     
     try:
         # Process document
@@ -241,9 +258,8 @@ async def upload_document(
         
         # Create knowledge base source
         source = KnowledgeBaseSource(
-            tenant_id=tenant_id,
             source_type=SourceType.DOCUMENT,
-            source_config={"file_path": file_path, "filename": file.filename, "file_type": file_type},
+            source_config={"file_url": file_url, "filename": file.filename, "file_type": file_type},
             status=SourceStatus.PROCESSING
         )
         db.add(source)
@@ -254,7 +270,6 @@ async def upload_document(
         articles_created = 0
         for article_data in articles:
             kb_article = KnowledgeBase(
-                tenant_id=tenant_id,
                 title=article_data["title"],
                 content=article_data["content"],
                 category=article_data["category"],
@@ -265,7 +280,7 @@ async def upload_document(
             db.flush()
             
             # Generate embedding
-            add_article_to_vector_db(kb_article.id, kb_article.title, kb_article.content, db, tenant_id=tenant_id)
+            add_article_to_vector_db(kb_article.id, kb_article.title, kb_article.content, db)
             articles_created += 1
         
         # Update source status
@@ -273,13 +288,27 @@ async def upload_document(
         source.last_synced_at = datetime.utcnow()
         db.commit()
         
+        # Clean up temporary file
+        if file_path and file_path.startswith(tempfile.gettempdir()):
+            try:
+                os.unlink(file_path)
+            except:
+                pass
+        
         return UploadResponse(
             message=f"Document processed successfully",
             articles_created=articles_created,
             source_id=source.id
         )
     except Exception as e:
-        source.status = SourceStatus.ERROR
-        db.commit()
+        if source:
+            source.status = SourceStatus.ERROR
+            db.commit()
+        # Clean up temporary file
+        if file_path and file_path.startswith(tempfile.gettempdir()):
+            try:
+                os.unlink(file_path)
+            except:
+                pass
         raise HTTPException(status_code=500, detail=f"Error processing document: {str(e)}")
 

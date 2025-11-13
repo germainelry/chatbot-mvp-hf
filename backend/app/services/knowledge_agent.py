@@ -44,19 +44,25 @@ async def handle_knowledge_query(
     """
     Handle knowledge base query using RAG.
     Returns response with confidence score.
+    
+    Args:
+        user_message: User's message
+        conversation_id: Conversation ID
+        db: Database session
+        tenant_id: Deprecated - kept for backward compatibility
     """
     # Search knowledge base
-    matched_articles = search_knowledge_base_vector(user_message, db, top_k=3, tenant_id=tenant_id)
+    matched_articles = search_knowledge_base_vector(user_message, db, top_k=3, tenant_id=None)
     
     # Calculate confidence
     confidence = calculate_confidence_score(matched_articles, user_message)
     
-    # Use tenant-aware LLM service
+    # Use LLM service
     result = await generate_ai_response(
         conversation_id=conversation_id,
         user_message=user_message,
         db=db,
-        tenant_id=tenant_id
+        tenant_id=None
     )
     
     # Add agent type
