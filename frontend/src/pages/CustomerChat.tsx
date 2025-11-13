@@ -27,6 +27,9 @@ export default function CustomerChat() {
   const [showHistory, setShowHistory] = useState(false);
   const [conversationHistory, setConversationHistory] = useState<any[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const isSendingRef = useRef<boolean>(false); // Track if we're currently sending a message
+  const loadingHistoryRef = useRef(false); // Prevent duplicate history loads
+  const loadingMessagesRef = useRef(false); // Prevent duplicate message loads
 
   // Initialize customer ID from localStorage or create new one
   useEffect(() => {
@@ -36,13 +39,29 @@ export default function CustomerChat() {
       localStorage.setItem('customer_id', storedCustomerId);
     }
     setCustomerId(storedCustomerId);
-    loadConversationHistory(storedCustomerId);
+    
+    // Always load conversation history on mount (but don't auto-load conversation)
+    loadConversationHistory(storedCustomerId, false).then(() => {
+      // After history is loaded, restore last viewed conversation ID from localStorage
+      const lastConversationId = localStorage.getItem('last_conversation_id');
+      if (lastConversationId) {
+        const convId = parseInt(lastConversationId, 10);
+        if (!isNaN(convId)) {
+          setConversationId(convId);
+          // Load messages for restored conversation (with a small delay to ensure customerId is set)
+          setTimeout(() => {
+            loadConversation(convId);
+          }, 100);
+        }
+      }
+    });
     
     // Apply theme
     const theme = getTheme();
     if (theme) {
       document.title = theme.brandName;
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Scroll to bottom when messages change
@@ -50,33 +69,121 @@ export default function CustomerChat() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const loadConversationHistory = async (custId: string) => {
-    try {
-      const allConversations = await getConversations();
-      // Filter conversations for this customer
-      const customerConvs = allConversations.filter(
-        (conv: any) => conv.customer_id === custId
-      );
-      setConversationHistory(customerConvs);
-      
-      // Load most recent active conversation if exists
-      const activeConv = customerConvs.find((c: any) => c.status === 'active');
-      if (activeConv) {
-        loadConversation(activeConv.id);
+  // Load messages when conversationId changes (but not on initial mount if already loading)
+  useEffect(() => {
+    if (conversationId && customerId && !isLoading && !isSendingRef.current) {
+      // Only load if we don't already have messages for this conversation
+      const currentConvId = messages.length > 0 ? messages[0]?.conversation_id : null;
+      if (currentConvId !== conversationId) {
+        loadConversation(conversationId);
       }
-    } catch (error) {
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId]);
+
+  // Reload conversation history when history sheet opens
+  useEffect(() => {
+    if (showHistory && customerId) {
+      loadConversationHistory(customerId);
+    }
+  }, [showHistory, customerId]);
+
+  const loadConversationHistory = async (custId: string, autoLoadConversation: boolean = true): Promise<void> => {
+    if (!custId) {
+      console.warn('No customer ID provided, cannot load conversation history');
+      return;
+    }
+    
+    // Prevent duplicate requests
+    if (loadingHistoryRef.current) {
+      return;
+    }
+    loadingHistoryRef.current = true;
+    
+    try {
+      console.log('Loading conversation history for customer:', custId);
+      // Use customer_id filter in API call for better performance
+      const customerConvs = await getConversations(undefined, custId);
+      console.log('Loaded conversations:', customerConvs);
+      setConversationHistory(customerConvs || []);
+      
+      // Only auto-load conversation if explicitly requested and no conversation is currently selected
+      // This prevents overriding messages that are already displayed
+      if (autoLoadConversation && !conversationId && customerConvs && customerConvs.length > 0) {
+        // Load most recent active conversation if exists
+        const activeConv = customerConvs.find((c: any) => c.status === 'active');
+        if (activeConv) {
+          console.log('Loading active conversation:', activeConv.id);
+          loadConversation(activeConv.id);
+        } else {
+          // If no active conversation, load the most recent one
+          const mostRecent = customerConvs[0];
+          console.log('Loading most recent conversation:', mostRecent.id);
+          loadConversation(mostRecent.id);
+        }
+      }
+    } catch (error: any) {
       console.error('Failed to load conversation history:', error);
+      console.error('Error details:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+        customerId: custId
+      });
+      if (error.response?.status === 401) {
+        console.error('Authentication failed. Check if VITE_API_KEY is set in .env.local and restart the dev server.');
+      } else if (error.message === 'Network Error' || error.code === 'ECONNREFUSED') {
+        console.error('Cannot connect to backend. Ensure backend server is running on http://localhost:8000');
+      }
+      setConversationHistory([]);
+    } finally {
+      loadingHistoryRef.current = false;
     }
   };
 
   const loadConversation = async (convId: number) => {
+    // Prevent duplicate requests for the same conversation
+    if (loadingMessagesRef.current) {
+      return;
+    }
+    
+    // Don't load if we're currently sending a message
+    if (isSendingRef.current) {
+      return;
+    }
+    
+    // Don't load if we don't have a customer ID yet
+    if (!customerId) {
+      return;
+    }
+    
+    loadingMessagesRef.current = true;
+    
     try {
       const msgs = await getConversationMessages(convId);
-      setMessages(msgs);
-      setConversationId(convId);
-      setShowHistory(false);
-    } catch (error) {
+      // Only update if we're still on the same conversation (prevent race conditions)
+      // Use a ref check to avoid stale closure issues
+      const currentConvId = conversationId;
+      if (convId === currentConvId || currentConvId === null) {
+        setMessages(msgs);
+        setConversationId(convId);
+        // Store last viewed conversation in localStorage for persistence
+        localStorage.setItem('last_conversation_id', convId.toString());
+        setShowHistory(false);
+      }
+    } catch (error: any) {
       console.error('Failed to load conversation:', error);
+      if (error.response?.status === 404) {
+        console.error('Conversation not found. It may have been deleted.');
+        // Clear invalid conversation ID from localStorage and state
+        localStorage.removeItem('last_conversation_id');
+        setConversationId(null);
+        setMessages([]);
+      } else if (error.message === 'Network Error' || error.code === 'ECONNREFUSED') {
+        console.error('Cannot connect to backend. Ensure backend server is running on http://localhost:8000');
+      }
+    } finally {
+      loadingMessagesRef.current = false;
     }
   };
 
@@ -84,42 +191,85 @@ export default function CustomerChat() {
     setConversationId(null);
     setMessages([]);
     setShowHistory(false);
+    // Clear last conversation from localStorage
+    localStorage.removeItem('last_conversation_id');
   };
 
   const handleSendMessage = async () => {
-    if (!inputMessage.trim()) return;
+    if (!inputMessage.trim() || isLoading || isSendingRef.current) return;
 
-    // Create conversation on first message (lazy initialization)
-    let activeConversationId = conversationId;
-    if (!activeConversationId) {
-      try {
-        const conversation = await createConversation(customerId);
-        activeConversationId = conversation.id;
-        setConversationId(activeConversationId);
-        // Reload history to show new conversation
-        loadConversationHistory(customerId);
-      } catch (error) {
-        console.error('Failed to create conversation:', error);
-        return;
-      }
-    }
-
-    const userMessageContent = inputMessage;
+    const userMessageContent = inputMessage.trim();
+    
+    // Mark that we're sending a message to prevent useEffect from clearing messages
+    isSendingRef.current = true;
+    
+    // Optimistic UI update: Clear input and show message immediately
     setInputMessage('');
     setIsLoading(true);
 
+    // Create optimistic message for immediate display
+    const optimisticMessage: Message = {
+      id: Date.now(), // Temporary ID
+      conversation_id: conversationId || 0,
+      content: userMessageContent,
+      message_type: 'customer',
+      created_at: new Date().toISOString(),
+    };
+
+    // Show message immediately (optimistic update)
+    setMessages(prev => [...prev, optimisticMessage]);
+
     try {
-      // Send customer message
-      const customerMsg = await sendMessage({
+      // Create conversation on first message (lazy initialization)
+      let activeConversationId = conversationId;
+      if (!activeConversationId) {
+        try {
+          const conversation = await createConversation(customerId);
+          activeConversationId = conversation.id;
+          setConversationId(activeConversationId);
+          // Store conversation ID in localStorage for persistence
+          localStorage.setItem('last_conversation_id', activeConversationId.toString());
+          // Update optimistic message with real conversation_id
+          setMessages(prev => prev.map(msg => 
+            msg.id === optimisticMessage.id 
+              ? { ...msg, conversation_id: activeConversationId! }
+              : msg
+          ));
+          // Reload history to show new conversation (after a short delay to ensure DB is updated)
+          // But don't auto-load the conversation since we already have messages
+          setTimeout(() => {
+            loadConversationHistory(customerId, false); // false = don't auto-load conversation
+          }, 500);
+        } catch (error) {
+          console.error('Failed to create conversation:', error);
+          // Remove optimistic message on error
+          setMessages(prev => prev.filter(msg => msg.id !== optimisticMessage.id));
+          setInputMessage(userMessageContent); // Restore input
+          setIsLoading(false);
+          return;
+        }
+      }
+
+      // Send customer message to backend (in background)
+      const customerMsgPromise = sendMessage({
         conversation_id: activeConversationId,
         content: userMessageContent,
         message_type: 'customer',
       });
 
-      setMessages(prev => [...prev, customerMsg]);
+      // Generate AI response (in parallel)
+      const aiResponsePromise = generateAIResponse(activeConversationId, userMessageContent);
 
-      // Generate AI response
-      const aiResponse = await generateAIResponse(activeConversationId, userMessageContent);
+      // Wait for both to complete
+      const [customerMsg, aiResponse] = await Promise.all([
+        customerMsgPromise,
+        aiResponsePromise,
+      ]);
+
+      // Replace optimistic message with real message from backend
+      setMessages(prev => prev.map(msg => 
+        msg.id === optimisticMessage.id ? customerMsg : msg
+      ));
 
       // For customer view, auto-send responses above confidence threshold (65%)
       // Lower confidence responses are queued for agent review
@@ -134,11 +284,11 @@ export default function CustomerChat() {
         setMessages(prev => [...prev, aiMsg]);
       } else {
         // Low confidence - show pending message for agent review
-        const pendingMsg = {
+        const pendingMsg: Message = {
           id: Date.now(),
           conversation_id: activeConversationId,
           content: 'Your message has been received and is being reviewed by our team. We\'ll respond shortly.',
-          message_type: 'final' as const,
+          message_type: 'final',
           confidence_score: 0,
           created_at: new Date().toISOString(),
         };
@@ -146,13 +296,17 @@ export default function CustomerChat() {
       }
     } catch (error) {
       console.error('Failed to send message:', error);
+      // Remove optimistic message on error
+      setMessages(prev => prev.filter(msg => msg.id !== optimisticMessage.id));
+      setInputMessage(userMessageContent); // Restore input
     } finally {
       setIsLoading(false);
+      isSendingRef.current = false; // Clear sending flag
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+  const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isDefaultPrevented()) {
       e.preventDefault();
       handleSendMessage();
     }
@@ -199,10 +353,22 @@ export default function CustomerChat() {
                 </TooltipProvider>
                 <SheetContent side="left" className="w-full sm:w-[540px] max-w-[540px]">
                   <SheetHeader>
-                    <SheetTitle>Conversation History</SheetTitle>
-                    <SheetDescription>
-                      Select a conversation to view messages
-                    </SheetDescription>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <SheetTitle>Conversation History</SheetTitle>
+                        <SheetDescription>
+                          Select a conversation to view messages
+                        </SheetDescription>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => customerId && loadConversationHistory(customerId)}
+                        title="Refresh"
+                      >
+                        <History className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </SheetHeader>
                   <Separator className="my-4" />
                   <ScrollArea className="h-[calc(100vh-8rem)]">
@@ -406,7 +572,7 @@ export default function CustomerChat() {
             <Input
               value={inputMessage}
               onChange={(e) => setInputMessage(e.target.value)}
-              onKeyPress={handleKeyPress}
+              onKeyDown={handleKeyPress}
               placeholder="Type your message..."
               disabled={isLoading}
               className="flex-1"

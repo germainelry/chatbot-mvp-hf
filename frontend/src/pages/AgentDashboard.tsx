@@ -3,7 +3,7 @@
  * Modern Human-in-the-Loop interface for agents to review, edit, and approve AI responses.
  * Demonstrates both pre-send and post-send HITL workflows.
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { AlertCircle, CheckCircle, XCircle, Edit2, Send, AlertTriangle, ThumbsDown, ThumbsUp } from 'lucide-react';
 import {
   getConversations,
@@ -46,6 +46,10 @@ export default function AgentDashboard() {
   const [csatScore, setCsatScore] = useState<number | null>(null);
   const [wasResponseEdited, setWasResponseEdited] = useState(false);
   const [finalResponseContent, setFinalResponseContent] = useState('');
+  
+  // Track in-flight requests to prevent duplicates
+  const loadingConversationsRef = useRef(false);
+  const loadingMessagesRef = useRef<number | null>(null);
 
   useEffect(() => {
     loadConversations();
@@ -60,15 +64,44 @@ export default function AgentDashboard() {
   }, [selectedConvId]);
 
   const loadConversations = async () => {
+    // Prevent duplicate requests
+    if (loadingConversationsRef.current) {
+      return;
+    }
+    loadingConversationsRef.current = true;
+    
     try {
       const convs = await getConversations();
-      setConversations(convs);
-    } catch (error) {
+      console.log('Loaded conversations:', convs);
+      setConversations(convs || []);
+    } catch (error: any) {
       console.error('Failed to load conversations:', error);
+      console.error('Error details:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+      });
+      // Show error to user
+      if (error.response?.status === 401) {
+        console.error('Authentication failed. Check if VITE_API_KEY is set in .env.local and restart the dev server.');
+      } else if (error.response?.status === 400) {
+        console.error('Bad request. Check if X-Tenant-ID header is being sent correctly.');
+      } else if (error.message === 'Network Error' || error.code === 'ECONNREFUSED') {
+        console.error('Cannot connect to backend. Ensure backend server is running on http://localhost:8000');
+      }
+      setConversations([]);
+    } finally {
+      loadingConversationsRef.current = false;
     }
   };
 
   const loadMessages = async (convId: number) => {
+    // Prevent duplicate requests for the same conversation
+    if (loadingMessagesRef.current === convId) {
+      return;
+    }
+    loadingMessagesRef.current = convId;
+    
     try {
       const msgs = await getConversationMessages(convId);
       setMessages(msgs);
@@ -95,6 +128,10 @@ export default function AgentDashboard() {
       }
     } catch (error) {
       console.error('Failed to load messages:', error);
+    } finally {
+      if (loadingMessagesRef.current === convId) {
+        loadingMessagesRef.current = null;
+      }
     }
   };
 

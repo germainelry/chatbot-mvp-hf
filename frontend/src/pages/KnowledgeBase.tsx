@@ -3,7 +3,7 @@
  * Modern interface for agents to add/edit/delete knowledge base articles.
  * Simple RAG implementation for AI context.
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Plus, Edit2, Trash2, Search, BookOpen, Save, X, Lightbulb } from 'lucide-react';
 import {
   getKnowledgeArticles,
@@ -37,12 +37,19 @@ export default function KnowledgeBase() {
   });
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [articleToDelete, setArticleToDelete] = useState<number | null>(null);
+  const loadingRef = useRef(false);
 
   useEffect(() => {
     loadArticles();
   }, [selectedCategory, searchTerm]);
 
   const loadArticles = async () => {
+    // Prevent duplicate requests
+    if (loadingRef.current) {
+      return;
+    }
+    loadingRef.current = true;
+    
     try {
       const data = await getKnowledgeArticles(
         selectedCategory || undefined,
@@ -51,6 +58,8 @@ export default function KnowledgeBase() {
       setArticles(data);
     } catch (error) {
       console.error('Failed to load articles:', error);
+    } finally {
+      loadingRef.current = false;
     }
   };
 

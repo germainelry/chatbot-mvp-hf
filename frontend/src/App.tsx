@@ -1,19 +1,31 @@
 import { BrowserRouter as Router, Routes, Route, useLocation, Link } from 'react-router-dom';
-import { MessageSquare, BarChart3, Users, BookOpen, Settings, Building2 } from 'lucide-react';
+import { MessageSquare, BarChart3, Users, BookOpen, Settings } from 'lucide-react';
 import { Button } from './components/ui/button';
 import { Separator } from './components/ui/separator';
-import CustomerChat from './pages/CustomerChat';
-import AgentDashboard from './pages/AgentDashboard';
-import Analytics from './pages/Analytics';
-import KnowledgeBase from './pages/KnowledgeBase';
-import Configuration from './pages/Configuration';
-import TenantManagement from './pages/TenantManagement';
-import Contact from './pages/Contact';
+import { lazy, Suspense, useEffect } from 'react';
 import DemoBanner from './components/DemoBanner';
 import { cn } from './components/ui/utils';
-import { useEffect } from 'react';
 import { getTheme, applyTheme } from './config/theme';
 import { Toaster } from 'sonner';
+import { Loader2 } from 'lucide-react';
+
+// Lazy load pages for better performance and code splitting
+const CustomerChat = lazy(() => import('./pages/CustomerChat'));
+const AgentDashboard = lazy(() => import('./pages/AgentDashboard'));
+const Analytics = lazy(() => import('./pages/Analytics'));
+const KnowledgeBase = lazy(() => import('./pages/KnowledgeBase'));
+const Configuration = lazy(() => import('./pages/Configuration'));
+const Contact = lazy(() => import('./pages/Contact'));
+
+// Loading component
+const PageLoader = () => (
+  <div className="flex items-center justify-center h-[calc(100vh-8rem)]">
+    <div className="text-center space-y-4">
+      <Loader2 className="h-12 w-12 animate-spin text-primary mx-auto" />
+      <p className="text-muted-foreground">Loading...</p>
+    </div>
+  </div>
+);
 
 function Navigation() {
   const location = useLocation();
@@ -24,7 +36,6 @@ function Navigation() {
     { path: '/analytics', label: 'Analytics', icon: BarChart3 },
     { path: '/knowledge-base', label: 'Knowledge Base', icon: BookOpen },
     { path: '/configuration', label: 'Configuration', icon: Settings },
-    { path: '/tenants', label: 'Tenants', icon: Building2 },
   ];
 
   return (
@@ -66,11 +77,6 @@ function Navigation() {
 
 function App() {
   useEffect(() => {
-    // Set default tenant ID if not set
-    if (!localStorage.getItem('tenant_id')) {
-      localStorage.setItem('tenant_id', '1');
-    }
-    
     // Load and apply theme on app start
     const theme = getTheme();
     if (theme) {
@@ -85,16 +91,17 @@ function App() {
         <Navigation />
         <main className="container py-6">
           <DemoBanner />
-          <Routes>
-            <Route path="/" element={<CustomerChat />} />
-            <Route path="/customer" element={<CustomerChat />} />
-            <Route path="/agent" element={<AgentDashboard />} />
-            <Route path="/analytics" element={<Analytics />} />
-            <Route path="/knowledge-base" element={<KnowledgeBase />} />
-            <Route path="/configuration" element={<Configuration />} />
-            <Route path="/tenants" element={<TenantManagement />} />
-            <Route path="/contact" element={<Contact />} />
-          </Routes>
+          <Suspense fallback={<PageLoader />}>
+            <Routes>
+              <Route path="/" element={<CustomerChat />} />
+              <Route path="/customer" element={<CustomerChat />} />
+              <Route path="/agent" element={<AgentDashboard />} />
+              <Route path="/analytics" element={<Analytics />} />
+              <Route path="/knowledge-base" element={<KnowledgeBase />} />
+              <Route path="/configuration" element={<Configuration />} />
+              <Route path="/contact" element={<Contact />} />
+            </Routes>
+          </Suspense>
         </main>
         <Toaster position="top-right" richColors />
       </div>

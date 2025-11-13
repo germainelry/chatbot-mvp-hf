@@ -16,15 +16,13 @@ import {
   uploadPDF,
   uploadCSV,
   uploadDocument,
-  createDatabaseConnection,
-  listDatabaseConnections,
-  getDatabaseTables,
-  syncDatabaseTable,
-  listTenants,
   TenantConfiguration as TenantConfigType,
-  DatabaseConnection,
-  TableInfo,
+  detectEnvironment,
+  getLLMProviderInfo,
+  EnvironmentInfo,
 } from '../services/api';
+import { LLMProviderGuide } from '../components/LLMProviderGuide';
+import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -37,12 +35,8 @@ import { applyTheme } from '../config/theme';
 import { Progress } from '../components/ui/progress';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip';
 
-const DEFAULT_TENANT_ID = 1; // Default tenant ID
-
 export default function Configuration() {
   const [activeTab, setActiveTab] = useState('llm');
-  const [selectedTenantId, setSelectedTenantId] = useState<number>(DEFAULT_TENANT_ID);
-  const [tenants, setTenants] = useState<Array<{ id: number; name: string; slug: string }>>([]);
   const [config, setConfig] = useState<TenantConfigType | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -50,9 +44,9 @@ export default function Configuration() {
   const [models, setModels] = useState<string[]>([]);
   const [embeddingModels, setEmbeddingModels] = useState<EmbeddingModel[]>([]);
   const [testingLLM, setTestingLLM] = useState(false);
-  const [dbConnections, setDbConnections] = useState<DatabaseConnection[]>([]);
-  const [selectedConnection, setSelectedConnection] = useState<number | null>(null);
-  const [tables, setTables] = useState<TableInfo[]>([]);
+  const [environment, setEnvironment] = useState<EnvironmentInfo | null>(null);
+  const [providerMetadata, setProviderMetadata] = useState<any>(null);
+  const [apiKeyError, setApiKeyError] = useState<string>('');
   
   // Enhanced upload state management
   const [uploadingPDF, setUploadingPDF] = useState(false);
@@ -74,63 +68,79 @@ export default function Configuration() {
     document: null,
   });
   
-  const [alert, setAlert] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [alert, setAlert] = useState<{ type: 'success' | 'error'; message: string; details?: string } | null>(null);
   
   // File input refs
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
   const documentInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    loadTenants();
-    loadConfiguration();
-    loadProviders();
-    loadEmbeddingModels();
-  }, []);
+  // Track loading state to prevent duplicate requests
+  const loadingRef = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    if (selectedTenantId) {
-      loadConfiguration();
-    }
-  }, [selectedTenantId]);
+    // OPTIMIZED: Load only configuration on mount
+    const loadInitialData = async () => {
+      if (loadingRef.current) return;
+      loadingRef.current = true;
 
+      try {
+        setLoading(true);
+        const configData = await getTenantConfiguration();
+        setConfig(configData);
+        applyTheme(configData);
+        setAlert(null);
+      } catch (error: any) {
+        console.error('Failed to load configuration:', error);
+        let errorMessage = 'Failed to load configuration';
+        if (error.response?.status === 401) {
+          errorMessage = 'Authentication failed. Check if VITE_API_KEY is set in .env.local and restart the dev server.';
+        } else if (error.response?.status === 404) {
+          errorMessage = 'Configuration not found. Please create a configuration for this tenant.';
+        } else if (error.message === 'Network Error' || error.code === 'ECONNREFUSED') {
+          errorMessage = 'Cannot connect to backend. Ensure backend server is running on http://localhost:8000';
+        }
+        setAlert({ type: 'error', message: errorMessage });
+      } finally {
+        setLoading(false);
+        loadingRef.current = false;
+      }
+    };
+
+    loadInitialData();
+  }, []); // Load once on mount
+
+  // OPTIMIZED: Lazy load data when tabs are activated
   useEffect(() => {
-    if (config?.llm_provider) {
-      loadModels(config.llm_provider);
-    }
-  }, [config?.llm_provider]);
+    const loadTabData = async () => {
+      if (activeTab === 'llm' && config?.llm_provider) {
+        // Load LLM tab data
+        if (providers.length === 0) {
+          const providersData = await listLLMProviders().catch(() => ({ providers: [] }));
+          setProviders(providersData.providers);
+        }
+        if (models.length === 0 || !providerMetadata) {
+          await Promise.all([
+            listLLMModels(config.llm_provider).then(data => setModels(data.models)).catch(() => {}),
+            getLLMProviderInfo(config.llm_provider).then(data => setProviderMetadata(data)).catch(() => {}),
+            detectEnvironment().then(data => setEnvironment(data)).catch(() => {}),
+          ]);
+        }
+      } else if (activeTab === 'advanced') {
+        // Load advanced tab data
+        if (embeddingModels.length === 0) {
+          const embeddingData = await listEmbeddingModels().catch(() => ({ models: [] }));
+          setEmbeddingModels(embeddingData.models);
+        }
+      }
+    };
 
-  const loadTenants = async () => {
-    try {
-      const data = await listTenants();
-      setTenants(data);
-    } catch (error) {
-      console.error('Failed to load tenants:', error);
-    }
-  };
+    loadTabData();
+  }, [activeTab, config?.llm_provider]);
 
-  const loadConfiguration = async () => {
-    try {
-      const data = await getTenantConfiguration(selectedTenantId);
-      setConfig(data);
-      applyTheme(data);
-    } catch (error) {
-      console.error('Failed to load configuration:', error);
-      setAlert({ type: 'error', message: 'Failed to load configuration' });
-    } finally {
-      setLoading(false);
-    }
-  };
 
-  const loadProviders = async () => {
-    try {
-      const data = await listLLMProviders();
-      setProviders(data.providers);
-    } catch (error) {
-      console.error('Failed to load providers:', error);
-    }
-  };
-
+  // Helper function to load models for a provider
   const loadModels = async (provider: string) => {
     try {
       const data = await listLLMModels(provider);
@@ -140,21 +150,23 @@ export default function Configuration() {
     }
   };
 
-  const loadEmbeddingModels = async () => {
+  // Helper function to load provider info
+  const loadProviderInfo = async (provider: string) => {
     try {
-      const data = await listEmbeddingModels();
-      setEmbeddingModels(data.models);
+      const data = await getLLMProviderInfo(provider);
+      setProviderMetadata(data);
     } catch (error) {
-      console.error('Failed to load embedding models:', error);
+      console.error('Failed to load provider info:', error);
     }
   };
 
+
   const handleSave = async () => {
     if (!config) return;
-    
+
     setSaving(true);
     try {
-      const updated = await updateTenantConfiguration(selectedTenantId, config);
+      const updated = await updateTenantConfiguration(1, config); // Use 1 for backward compatibility
       setConfig(updated);
       applyTheme(updated);
       setAlert({ type: 'success', message: 'Configuration saved successfully' });
@@ -168,17 +180,47 @@ export default function Configuration() {
     }
   };
 
+  const validateAPIKey = (provider: string, apiKey: string): string => {
+    if (!apiKey) return '';
+    
+    if (provider === 'openai') {
+      const regex = /^sk-[a-zA-Z0-9]{48}$/;
+      if (!regex.test(apiKey)) {
+        return 'Invalid OpenAI API key format. Should start with sk- and be 51 characters long.';
+      }
+    } else if (provider === 'anthropic') {
+      const regex = /^sk-ant-[a-zA-Z0-9\-_]{95,}$/;
+      if (!regex.test(apiKey)) {
+        return 'Invalid Anthropic API key format. Should start with sk-ant- and be at least 100 characters long.';
+      }
+    }
+    
+    return '';
+  };
+
   const handleTestLLM = async () => {
     if (!config) return;
     
-    // Validate API key for cloud providers
-    if ((config.llm_provider === 'openai' || config.llm_provider === 'anthropic') && !config.llm_config?.api_key) {
-      setAlert({ type: 'error', message: 'API key is required for cloud providers' });
-      setTimeout(() => setAlert(null), 3000);
+    // Validate API key format if provided
+    if (config.llm_config?.api_key) {
+      const error = validateAPIKey(config.llm_provider, config.llm_config.api_key);
+      if (error) {
+        setApiKeyError(error);
+        setAlert({ type: 'error', message: error });
+        return;
+      }
+      setApiKeyError('');
+    }
+    
+    // Validate API key is provided for all providers
+    if (!config.llm_config?.api_key) {
+      setAlert({ type: 'error', message: 'API key is required for all providers' });
       return;
     }
     
     setTestingLLM(true);
+    setAlert({ type: 'success', message: `Testing connection to ${config.llm_model_name}...` });
+    
     try {
       const result = await testLLMConnection({
         provider: config.llm_provider,
@@ -186,12 +228,25 @@ export default function Configuration() {
         config: config.llm_config,
       });
       
-      setAlert({ type: result.success ? 'success' : 'error', message: result.message });
-      setTimeout(() => setAlert(null), 3000);
+      setAlert({ 
+        type: result.success ? 'success' : 'error', 
+        message: result.message,
+        details: result.test_response 
+      });
+      
+      // Auto-dismiss success messages after 8 seconds, but keep errors
+      if (result.success) {
+        setTimeout(() => setAlert(null), 8000);
+      }
     } catch (error: any) {
       const errorMessage = error.response?.data?.detail || 'Failed to test LLM connection';
-      setAlert({ type: 'error', message: errorMessage });
-      setTimeout(() => setAlert(null), 3000);
+      const errorDetails = error.response?.data?.error || error.message || '';
+      setAlert({ 
+        type: 'error', 
+        message: `Connection test failed for ${config.llm_model_name}`,
+        details: errorMessage
+      });
+      // Errors stay visible until manually dismissed
     } finally {
       setTestingLLM(false);
     }
@@ -295,35 +350,7 @@ export default function Configuration() {
     return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
   };
 
-  const loadDatabaseConnections = async () => {
-    try {
-      const connections = await listDatabaseConnections();
-      setDbConnections(connections);
-    } catch (error) {
-      console.error('Failed to load database connections:', error);
-    }
-  };
 
-  const loadTables = async (connectionId: number) => {
-    try {
-      const tableList = await getDatabaseTables(connectionId);
-      setTables(tableList);
-    } catch (error) {
-      console.error('Failed to load tables:', error);
-    }
-  };
-
-  useEffect(() => {
-    if (activeTab === 'database') {
-      loadDatabaseConnections();
-    }
-  }, [activeTab]);
-
-  useEffect(() => {
-    if (selectedConnection) {
-      loadTables(selectedConnection);
-    }
-  }, [selectedConnection]);
 
   if (loading || !config) {
     return <div>Loading...</div>;
@@ -336,36 +363,32 @@ export default function Configuration() {
         description="Manage LLM, Knowledge Base, UI, and advanced settings"
       />
 
-      {/* Tenant Selector */}
-      {tenants.length > 1 && (
-        <Card>
-          <CardContent className="pt-6">
-            <div className="space-y-2">
-              <Label htmlFor="tenant-select">Select Tenant</Label>
-              <Select
-                value={selectedTenantId.toString()}
-                onValueChange={(value) => setSelectedTenantId(parseInt(value))}
-              >
-                <SelectTrigger id="tenant-select">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {tenants.map((tenant) => (
-                    <SelectItem key={tenant.id} value={tenant.id.toString()}>
-                      {tenant.name} ({tenant.slug})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       {alert && (
-        <Alert variant={alert.type === 'error' ? 'destructive' : 'default'}>
-          <AlertTitle>{alert.type === 'error' ? 'Error' : 'Success'}</AlertTitle>
-          <AlertDescription>{alert.message}</AlertDescription>
+        <Alert variant={alert.type === 'error' ? 'destructive' : 'default'} className="relative">
+          <div className="flex items-start justify-between">
+            <div className="flex-1">
+              <AlertTitle className="flex items-center gap-2">
+                {alert.type === 'error' ? 'Error' : 'Success'}
+              </AlertTitle>
+              <AlertDescription className="mt-2">
+                {alert.message}
+                {alert.details && (
+                  <div className="mt-2 p-2 bg-muted/50 rounded text-xs font-mono whitespace-pre-wrap max-h-32 overflow-auto">
+                    {alert.details}
+                  </div>
+                )}
+              </AlertDescription>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 w-6 p-0"
+              onClick={() => setAlert(null)}
+            >
+              ×
+            </Button>
+          </div>
         </Alert>
       )}
 
@@ -404,6 +427,8 @@ export default function Configuration() {
                   onValueChange={(value) => {
                     setConfig({ ...config, llm_provider: value });
                     loadModels(value);
+                    loadProviderInfo(value);
+                    setApiKeyError('');
                   }}
                 >
                   <SelectTrigger id="provider">
@@ -412,26 +437,27 @@ export default function Configuration() {
                   <SelectContent>
                     {providers.map((provider) => (
                       <SelectItem key={provider} value={provider}>
-                        <div className="flex items-center gap-2">
-                          <span className="capitalize">{provider}</span>
-                          {(provider === 'openai' || provider === 'anthropic') && (
-                            <span className="text-xs text-muted-foreground">(Cloud)</span>
-                          )}
-                        </div>
+                        <span className="capitalize">{provider}</span>
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
 
+              {/* Provider Guide */}
+              {config.llm_provider && (
+                <LLMProviderGuide provider={config.llm_provider} />
+              )}
+
+              {/* Model Selection */}
               <div className="space-y-2">
-                <Label htmlFor="model">Model</Label>
+                <Label htmlFor="model">Select Model</Label>
                 <Select
                   value={config.llm_model_name}
                   onValueChange={(value) => setConfig({ ...config, llm_model_name: value })}
                 >
                   <SelectTrigger id="model">
-                    <SelectValue />
+                    <SelectValue placeholder="Select a model" />
                   </SelectTrigger>
                   <SelectContent>
                     {models.map((model) => (
@@ -441,31 +467,46 @@ export default function Configuration() {
                     ))}
                   </SelectContent>
                 </Select>
+                {models.length === 0 && (
+                  <p className="text-sm text-muted-foreground">
+                    Loading available models...
+                  </p>
+                )}
               </div>
 
-              {/* API Key input for cloud providers */}
-              {(config.llm_provider === 'openai' || config.llm_provider === 'anthropic') && (
-                <div className="space-y-2">
-                  <Label htmlFor="apiKey">
-                    API Key {config.llm_provider === 'openai' ? '(OpenAI)' : '(Anthropic)'}
-                  </Label>
+              {/* API Key input - required for all providers */}
+              <div className="space-y-2">
+                <Label htmlFor="apiKey">
+                  API Key <span className="text-red-500">(Required)</span>
+                </Label>
                   <Input
                     id="apiKey"
                     type="password"
                     value={config.llm_config?.api_key || ''}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      const newApiKey = e.target.value;
                       setConfig({
                         ...config,
-                        llm_config: { ...config.llm_config, api_key: e.target.value },
-                      })
-                    }
+                        llm_config: { ...config.llm_config, api_key: newApiKey },
+                      });
+                      // Validate on change
+                      if (newApiKey) {
+                        const error = validateAPIKey(config.llm_provider, newApiKey);
+                        setApiKeyError(error);
+                      } else {
+                        setApiKeyError('');
+                      }
+                    }}
                     placeholder={`Enter your ${config.llm_provider} API key`}
+                    className={apiKeyError ? 'border-red-500' : ''}
                   />
-                  <p className="text-sm text-muted-foreground">
-                    Your API key is stored securely and only used for LLM requests.
-                  </p>
-                </div>
-              )}
+                  {apiKeyError && (
+                    <p className="text-sm text-red-500">{apiKeyError}</p>
+                  )}
+                <p className="text-sm text-muted-foreground">
+                  Your API key is stored securely and only used for LLM requests.
+                </p>
+              </div>
 
               {/* Base URL for OpenAI (Azure support) */}
               {config.llm_provider === 'openai' && (
@@ -521,20 +562,7 @@ export default function Configuration() {
                         <FileText className="h-4 w-4 text-red-500" />
                         Upload PDF
                       </Label>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p className="max-w-xs">
-                            Upload PDF documents (manuals, guides, reports). The system will extract text and create searchable articles.
-                          </p>
-                        </TooltipContent>
-                      </Tooltip>
                     </div>
-                    <p className="text-sm text-muted-foreground">
-                      Best for: Manuals, guides, reports, and structured documents
-                    </p>
                     <input
                       ref={pdfInputRef}
                       id="pdf-upload"
@@ -609,20 +637,7 @@ export default function Configuration() {
                         <FileText className="h-4 w-4 text-green-500" />
                         Upload CSV
                       </Label>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p className="max-w-xs">
-                            Upload CSV files with structured data. Each row will be converted into a knowledge article. Ensure your CSV has headers.
-                          </p>
-                        </TooltipContent>
-                      </Tooltip>
                     </div>
-                    <p className="text-sm text-muted-foreground">
-                      Best for: Structured data, FAQs, product catalogs, and tabular information
-                    </p>
                     <input
                       ref={csvInputRef}
                       id="csv-upload"
@@ -697,20 +712,7 @@ export default function Configuration() {
                         <FileText className="h-4 w-4 text-blue-500" />
                         Upload Document
                       </Label>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p className="max-w-xs">
-                            Upload text documents (.txt, .md, .docx). Markdown files are especially well-supported and preserve formatting.
-                          </p>
-                        </TooltipContent>
-                      </Tooltip>
                     </div>
-                    <p className="text-sm text-muted-foreground">
-                      Best for: Text files, markdown documents, and Word documents
-                    </p>
                     <input
                       ref={documentInputRef}
                       id="document-upload"
@@ -779,61 +781,17 @@ export default function Configuration() {
                   </div>
                 </div>
               </TooltipProvider>
-              
+
+              {/* OPTIMIZED: Simplified guidelines */}
               <div className="mt-4 p-4 bg-muted/50 rounded-lg border border-dashed">
-                <p className="text-sm font-medium mb-2">File Upload Guidelines:</p>
+                <p className="text-sm font-medium mb-2">Quick Guide:</p>
                 <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
-                  <li>Maximum file size: 10MB per file (recommended)</li>
-                  <li>PDF files should be text-based (not scanned images)</li>
-                  <li>CSV files should include headers in the first row</li>
-                  <li>Documents are automatically chunked into searchable articles</li>
-                  <li>Processing time varies based on file size and complexity</li>
+                  <li><strong>PDF:</strong> Manuals, guides, reports (text-based, not scanned)</li>
+                  <li><strong>CSV:</strong> FAQs, product catalogs (must include headers)</li>
+                  <li><strong>Documents:</strong> .txt, .md, .docx files</li>
+                  <li>Max 10MB per file • Auto-processed into searchable articles</li>
                 </ul>
               </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Database Connections</CardTitle>
-              <CardDescription>
-                Connect external databases to import data into your knowledge base. Select tables and columns to sync.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <DatabaseConnectionForm onSuccess={loadDatabaseConnections} />
-              {dbConnections.length > 0 && (
-                <div className="space-y-2">
-                  <Label>Select Connection</Label>
-                  <Select
-                    value={selectedConnection?.toString() || ''}
-                    onValueChange={(value) => setSelectedConnection(parseInt(value))}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select a connection" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {dbConnections.map((conn) => (
-                        <SelectItem key={conn.id} value={conn.id.toString()}>
-                          {conn.connection_name} ({conn.db_type})
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-              {selectedConnection && tables.length > 0 && (
-                <div className="mt-4">
-                  <DatabaseTableSync
-                    connectionId={selectedConnection}
-                    tables={tables}
-                    onSync={loadDatabaseConnections}
-                  />
-                </div>
-              )}
-              {selectedConnection && tables.length === 0 && (
-                <p className="text-sm text-muted-foreground">No tables found in this database.</p>
-              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -979,243 +937,4 @@ export default function Configuration() {
     </div>
   );
 }
-
-// Database Connection Form Component
-function DatabaseConnectionForm({ onSuccess }: { onSuccess: () => void }) {
-  const [formData, setFormData] = useState({
-    connection_name: '',
-    db_type: 'postgresql',
-    host: '',
-    port: 5432,
-    database: 'postgres',
-    username: 'postgres',
-    password: '',
-  });
-  const [submitting, setSubmitting] = useState(false);
-
-  const handleDbTypeChange = (value: string) => {
-    setFormData({
-      ...formData,
-      db_type: value,
-      // Auto-fill defaults for Supabase
-      ...(value === 'supabase' && {
-        port: 5432,
-        database: 'postgres',
-        username: 'postgres',
-      }),
-    });
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSubmitting(true);
-    try {
-      await createDatabaseConnection(formData);
-      setFormData({
-        connection_name: '',
-        db_type: 'postgresql',
-        host: '',
-        port: 5432,
-        database: 'postgres',
-        username: 'postgres',
-        password: '',
-      });
-      onSuccess();
-    } catch (error) {
-      console.error('Failed to create connection:', error);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label htmlFor="connection-name">Connection Name</Label>
-          <Input
-            id="connection-name"
-            value={formData.connection_name}
-            onChange={(e) => setFormData({ ...formData, connection_name: e.target.value })}
-            placeholder="e.g., Production DB"
-            required
-          />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="db-type">Database Type</Label>
-          <Select
-            value={formData.db_type}
-            onValueChange={handleDbTypeChange}
-          >
-            <SelectTrigger id="db-type">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="postgresql">PostgreSQL</SelectItem>
-              <SelectItem value="supabase">Supabase</SelectItem>
-              <SelectItem value="mysql">MySQL</SelectItem>
-              <SelectItem value="sqlite">SQLite</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="host">
-            Host {formData.db_type === 'supabase' && <span className="text-muted-foreground font-normal">(Project URL)</span>}
-          </Label>
-          <Input
-            id="host"
-            value={formData.host}
-            onChange={(e) => setFormData({ ...formData, host: e.target.value })}
-            placeholder={formData.db_type === 'supabase' ? 'db.xxxxx.supabase.co' : 'localhost'}
-            required
-          />
-          {formData.db_type === 'supabase' && (
-            <p className="text-xs text-muted-foreground mt-1">
-              Find this in your Supabase project settings under Database → Connection string
-            </p>
-          )}
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="port">Port</Label>
-          <Input
-            id="port"
-            type="number"
-            value={formData.port}
-            onChange={(e) => setFormData({ ...formData, port: parseInt(e.target.value) || 5432 })}
-            required
-            disabled={formData.db_type === 'supabase'}
-          />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="database">Database</Label>
-          <Input
-            id="database"
-            value={formData.database}
-            onChange={(e) => setFormData({ ...formData, database: e.target.value })}
-            required
-            disabled={formData.db_type === 'supabase'}
-          />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="username">Username</Label>
-          <Input
-            id="username"
-            value={formData.username}
-            onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-            required
-            disabled={formData.db_type === 'supabase'}
-          />
-        </div>
-        <div className="space-y-2 col-span-2">
-          <Label htmlFor="password">
-            Password {formData.db_type === 'supabase' && <span className="text-muted-foreground font-normal">(Database Password)</span>}
-          </Label>
-          <Input
-            id="password"
-            type="password"
-            value={formData.password}
-            onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-            placeholder={formData.db_type === 'supabase' ? 'Your Supabase database password' : ''}
-            required
-          />
-          {formData.db_type === 'supabase' && (
-            <p className="text-xs text-muted-foreground mt-1">
-              This is your database password, not your Supabase account password. Find it in Database → Connection string.
-            </p>
-          )}
-        </div>
-      </div>
-      <div className="flex gap-2 pt-2">
-        <Button type="submit" disabled={submitting}>
-          {submitting ? 'Connecting...' : 'Create Connection'}
-        </Button>
-      </div>
-    </form>
-  );
-}
-
-// Database Table Sync Component
-function DatabaseTableSync({
-  connectionId,
-  tables,
-  onSync,
-}: {
-  connectionId: number;
-  tables: TableInfo[];
-  onSync: () => void;
-}) {
-  const [selectedTable, setSelectedTable] = useState<string>('');
-  const [selectedColumns, setSelectedColumns] = useState<string[]>([]);
-  const [syncing, setSyncing] = useState(false);
-
-  const handleSync = async () => {
-    if (!selectedTable || selectedColumns.length === 0) return;
-    
-    setSyncing(true);
-    try {
-      const result = await syncDatabaseTable({
-        connection_id: connectionId,
-        table_name: selectedTable,
-        columns: selectedColumns,
-      });
-      alert(`Synced ${result.articles_created} articles from ${selectedTable}`);
-      onSync();
-    } catch (error) {
-      console.error('Failed to sync table:', error);
-    } finally {
-      setSyncing(false);
-    }
-  };
-
-  const table = tables.find((t) => t.name === selectedTable);
-
-  return (
-    <div className="space-y-4">
-      <div className="space-y-2">
-        <Label>Select Table</Label>
-        <Select value={selectedTable} onValueChange={setSelectedTable}>
-          <SelectTrigger>
-            <SelectValue placeholder="Select a table" />
-          </SelectTrigger>
-          <SelectContent>
-            {tables.map((t) => (
-              <SelectItem key={t.name} value={t.name}>
-                {t.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      {table && (
-        <div className="space-y-2">
-          <Label>Select Columns</Label>
-          <div className="grid grid-cols-3 gap-2">
-            {table.columns.map((col) => (
-              <label key={col} className="flex items-center space-x-2">
-                <input
-                  type="checkbox"
-                  checked={selectedColumns.includes(col)}
-                  onChange={(e) => {
-                    if (e.target.checked) {
-                      setSelectedColumns([...selectedColumns, col]);
-                    } else {
-                      setSelectedColumns(selectedColumns.filter((c) => c !== col));
-                    }
-                  }}
-                />
-                <span className="text-sm">{col}</span>
-              </label>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <Button onClick={handleSync} disabled={syncing || !selectedTable || selectedColumns.length === 0}>
-        {syncing ? 'Syncing...' : 'Sync Table'}
-      </Button>
-    </div>
-  );
-}
-
 

@@ -24,15 +24,42 @@ api.interceptors.request.use((config) => {
   // Add API key if provided (required for write operations in production)
   if (API_KEY) {
     config.headers['X-API-Key'] = API_KEY;
+  } else {
+    console.warn('VITE_API_KEY not set. Some API calls may fail.');
   }
   
-  // Add tenant ID to requests
-  const tenantId = localStorage.getItem('tenant_id');
-  if (tenantId) {
-    config.headers['X-Tenant-ID'] = tenantId;
-  }
   return config;
 });
+
+// Add response interceptor for error handling and logging
+api.interceptors.response.use(
+  (response) => {
+    // Log successful responses in development
+    if (import.meta.env.DEV) {
+      console.log(`[API] ${response.config.method?.toUpperCase()} ${response.config.url} - ${response.status}`);
+    }
+    return response;
+  },
+  (error) => {
+    // Log errors with details
+    if (error.response) {
+      // Server responded with error status
+      console.error(`[API Error] ${error.config?.method?.toUpperCase()} ${error.config?.url} - ${error.response.status}:`, {
+        status: error.response.status,
+        statusText: error.response.statusText,
+        data: error.response.data,
+        headers: error.response.headers
+      });
+    } else if (error.request) {
+      // Request made but no response received
+      console.error(`[API Error] ${error.config?.method?.toUpperCase()} ${error.config?.url} - No response:`, error.message);
+    } else {
+      // Error setting up request
+      console.error(`[API Error] ${error.config?.method?.toUpperCase()} ${error.config?.url}:`, error.message);
+    }
+    return Promise.reject(error);
+  }
+);
 
 // Types
 export interface Conversation {
@@ -137,8 +164,11 @@ export const createConversation = async (customerId: string): Promise<Conversati
   return response.data;
 };
 
-export const getConversations = async (status?: string): Promise<Conversation[]> => {
-  const response = await api.get('/conversations', { params: { status } });
+export const getConversations = async (status?: string, customer_id?: string): Promise<Conversation[]> => {
+  const params: any = {};
+  if (status) params.status = status;
+  if (customer_id) params.customer_id = customer_id;
+  const response = await api.get('/conversations', { params });
   return response.data;
 };
 
@@ -298,31 +328,29 @@ export interface Tenant {
   updated_at: string;
 }
 
-export interface DatabaseConnection {
-  id: number;
-  connection_name: string;
-  db_type: string;
-  is_active: number;
-  created_at: string;
-}
-
-export interface TableInfo {
-  name: string;
-  columns: string[];
-}
-
-// Configuration API
-export const getTenantConfiguration = async (tenantId: number): Promise<TenantConfiguration> => {
-  const response = await api.get(`/config/tenant/${tenantId}`);
+// Configuration API (global configuration)
+export const getConfiguration = async (): Promise<TenantConfiguration> => {
+  const response = await api.get(`/config`);
   return response.data;
+};
+
+export const updateConfiguration = async (
+  config: Partial<TenantConfiguration>
+): Promise<TenantConfiguration> => {
+  const response = await api.put(`/config`, config);
+  return response.data;
+};
+
+// Backward compatibility aliases
+export const getTenantConfiguration = async (tenantId?: number): Promise<TenantConfiguration> => {
+  return getConfiguration();
 };
 
 export const updateTenantConfiguration = async (
   tenantId: number,
   config: Partial<TenantConfiguration>
 ): Promise<TenantConfiguration> => {
-  const response = await api.put(`/config/tenant/${tenantId}`, config);
-  return response.data;
+  return updateConfiguration(config);
 };
 
 export const listLLMProviders = async (): Promise<{ providers: string[] }> => {
@@ -334,6 +362,34 @@ export const listLLMModels = async (provider: string): Promise<{ models: string[
   const response = await api.get(`/config/llm-models/${provider}`);
   return response.data;
 };
+
+export interface EnvironmentInfo {
+  default_provider: string;
+  default_model: string;
+}
+
+export const detectEnvironment = async (): Promise<EnvironmentInfo> => {
+  const response = await api.get('/config/environment');
+  return response.data;
+};
+
+export interface ProviderMetadata {
+  display_name: string;
+  description: string;
+  cost: string;
+  environments: string[];
+  requires_api_key: boolean;
+  setup_complexity: string;
+  setup_steps: string[];
+  signup_url?: string;
+  paid_models?: string[];
+}
+
+export const getLLMProviderInfo = async (provider: string): Promise<ProviderMetadata> => {
+  const response = await api.get(`/config/llm-provider-info/${provider}`);
+  return response.data;
+};
+
 
 export const testLLMConnection = async (data: {
   provider: string;
@@ -383,74 +439,7 @@ export const uploadDocument = async (file: File): Promise<{ message: string; art
   return response.data;
 };
 
-// Database RAG
-export const createDatabaseConnection = async (data: {
-  connection_name: string;
-  db_type: string;
-  host: string;
-  port: number;
-  database: string;
-  username: string;
-  password: string;
-}): Promise<DatabaseConnection> => {
-  const response = await api.post('/knowledge-base/connect', data);
-  return response.data;
-};
-
-export const listDatabaseConnections = async (): Promise<DatabaseConnection[]> => {
-  const response = await api.get('/knowledge-base/connections');
-  return response.data;
-};
-
-export const getDatabaseTables = async (connectionId: number): Promise<TableInfo[]> => {
-  const response = await api.get(`/knowledge-base/connections/${connectionId}/tables`);
-  return response.data;
-};
-
-export const syncDatabaseTable = async (data: {
-  connection_id: number;
-  table_name: string;
-  columns: string[];
-}): Promise<{ message: string; articles_created: number }> => {
-  const response = await api.post('/knowledge-base/sync', data);
-  return response.data;
-};
-
-export const deleteDatabaseConnection = async (connectionId: number): Promise<void> => {
-  await api.delete(`/knowledge-base/connections/${connectionId}`);
-};
-
-// Tenant Management
-export const createTenant = async (data: {
-  name: string;
-  slug: string;
-  is_active?: number;
-}): Promise<Tenant> => {
-  const response = await api.post('/tenants', data);
-  return response.data;
-};
-
-export const listTenants = async (): Promise<Tenant[]> => {
-  const response = await api.get('/tenants');
-  return response.data;
-};
-
-export const getTenant = async (tenantId: number): Promise<Tenant> => {
-  const response = await api.get(`/tenants/${tenantId}`);
-  return response.data;
-};
-
-export const updateTenant = async (
-  tenantId: number,
-  data: Partial<Tenant>
-): Promise<Tenant> => {
-  const response = await api.put(`/tenants/${tenantId}`, data);
-  return response.data;
-};
-
-export const deleteTenant = async (tenantId: number): Promise<void> => {
-  await api.delete(`/tenants/${tenantId}`);
-};
+// Tenant Management - REMOVED (no longer needed)
 
 export default api;
 
