@@ -3,7 +3,7 @@
  * Manage tenant settings: LLM, Knowledge Base, UI customization, and advanced settings.
  */
 import { useState, useEffect, useRef } from 'react';
-import { Brain, Database, Palette, Sliders, Save, TestTube, Loader2, Upload, FileText, CheckCircle2, AlertCircle, HelpCircle } from 'lucide-react';
+import { Brain, Database, Palette, Sliders, Save, TestTube, Loader2, Upload, FileText, CheckCircle2, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   getTenantConfiguration,
@@ -17,12 +17,9 @@ import {
   uploadCSV,
   uploadDocument,
   TenantConfiguration as TenantConfigType,
-  detectEnvironment,
   getLLMProviderInfo,
-  EnvironmentInfo,
 } from '../services/api';
 import { LLMProviderGuide } from '../components/LLMProviderGuide';
-import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -33,7 +30,7 @@ import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
 import { PageHeader } from '../components/layout/PageHeader';
 import { applyTheme } from '../config/theme';
 import { Progress } from '../components/ui/progress';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip';
+import { TooltipProvider } from '../components/ui/tooltip';
 
 export default function Configuration() {
   const [activeTab, setActiveTab] = useState('llm');
@@ -44,7 +41,6 @@ export default function Configuration() {
   const [models, setModels] = useState<string[]>([]);
   const [embeddingModels, setEmbeddingModels] = useState<EmbeddingModel[]>([]);
   const [testingLLM, setTestingLLM] = useState(false);
-  const [environment, setEnvironment] = useState<EnvironmentInfo | null>(null);
   const [providerMetadata, setProviderMetadata] = useState<any>(null);
   const [apiKeyError, setApiKeyError] = useState<string>('');
   
@@ -77,7 +73,6 @@ export default function Configuration() {
 
   // Track loading state to prevent duplicate requests
   const loadingRef = useRef(false);
-  const abortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     // OPTIMIZED: Load only configuration on mount
@@ -124,7 +119,6 @@ export default function Configuration() {
           await Promise.all([
             listLLMModels(config.llm_provider).then(data => setModels(data.models)).catch(() => {}),
             getLLMProviderInfo(config.llm_provider).then(data => setProviderMetadata(data)).catch(() => {}),
-            detectEnvironment().then(data => setEnvironment(data)).catch(() => {}),
           ]);
         }
       } else if (activeTab === 'advanced') {
@@ -240,7 +234,6 @@ export default function Configuration() {
       }
     } catch (error: any) {
       const errorMessage = error.response?.data?.detail || 'Failed to test LLM connection';
-      const errorDetails = error.response?.data?.error || error.message || '';
       setAlert({ 
         type: 'error', 
         message: `Connection test failed for ${config.llm_model_name}`,

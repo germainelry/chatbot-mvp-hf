@@ -29,7 +29,6 @@ interface ModelSelectorProps {
 }
 
 export function ModelSelector({
-  provider,
   selectedModel,
   onModelChange,
   allowCustom = false,

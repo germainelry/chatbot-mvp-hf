@@ -369,12 +369,12 @@ export const updateConfiguration = async (
 };
 
 // Backward compatibility aliases
-export const getTenantConfiguration = async (tenantId?: number): Promise<TenantConfiguration> => {
+export const getTenantConfiguration = async (_tenantId?: number): Promise<TenantConfiguration> => {
   return getConfiguration();
 };
 
 export const updateTenantConfiguration = async (
-  tenantId: number,
+  _tenantId: number,
   config: Partial<TenantConfiguration>
 ): Promise<TenantConfiguration> => {
   return updateConfiguration(config);
