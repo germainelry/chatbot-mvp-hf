@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy minimal requirements
-COPY requirements-minimal.txt .
+COPY requirements.txt .
 
 # Install Python dependencies with optimizations
 RUN pip install --no-cache-dir --user -r requirements-minimal.txt
