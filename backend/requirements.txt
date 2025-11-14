@@ -1,46 +1,59 @@
+# Minimal requirements for memory-constrained deployment (Railway, etc.)
+# This file excludes heavy ML dependencies for deployments with <1GB RAM
+
+# Core FastAPI dependencies
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 gunicorn>=21.2.0
+
+# Database
 sqlalchemy>=2.0.25
+psycopg2-binary>=2.9.0  # PostgreSQL
+pymysql>=1.1.0  # MySQL
+
+# Data validation
 pydantic>=2.10.0
 pydantic-settings>=2.7.0
 python-dotenv==1.0.0
-ollama==0.1.6
+
+# HTTP client
 httpx==0.25.2
 python-multipart==0.0.6
-sentence-transformers>=2.2.2
-numpy>=1.24.0,<2.0.0
-nltk>=3.8.1
-chromadb>=0.4.15
-
-# Document processing
-PyPDF2>=3.0.0
-pypdf>=3.0.0
-pandas>=2.0.0
-python-docx>=1.0.0
-
-# Database connections
-psycopg2-binary>=2.9.0  # PostgreSQL
-pymysql>=1.1.0  # MySQL
-cryptography>=41.0.0  # Encrypt DB connections
 
 # Authentication
-PyJWT>=2.8.0  # JWT token handling
-bcrypt>=4.0.0  # Password hashing
-
-# Hugging Face (optional, for local inference)
-transformers>=4.35.0
-accelerate>=0.24.0  # Optional, for optimization
-
-# Cloud LLM providers (optional)
-openai>=1.0.0  # OpenAI API
-anthropic>=0.7.0  # Anthropic Claude API
+PyJWT>=2.8.0
+bcrypt>=4.0.0
+cryptography>=41.0.0
 
 # Rate limiting
 slowapi>=0.1.9
 
-# HuggingFace Inference API
-huggingface_hub>=0.20.0
+# Cloud LLM providers (API-based, no heavy models)
+openai>=1.0.0  # OpenAI API
+anthropic>=0.7.0  # Anthropic Claude API
 
 # Supabase client
 supabase>=2.0.0
+
+# Lightweight utilities
+numpy>=1.24.0,<2.0.0
+
+# Document processing (lightweight)
+PyPDF2>=3.0.0
+python-docx>=1.0.0
+
+# Note: The following heavy dependencies are EXCLUDED for minimal deployment:
+# - sentence-transformers (80-150MB + model downloads)
+# - chromadb (vector database overhead)
+# - transformers (HuggingFace, 500MB+)
+# - accelerate
+# - ollama
+# - nltk
+# - pandas
+# - pypdf
+# - huggingface_hub
+#
+# If you need RAG/embeddings, use API-based services like:
+# - OpenAI embeddings API
+# - Cohere embeddings API
+# - Voyage AI embeddings API

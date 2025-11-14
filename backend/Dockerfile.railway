@@ -1,0 +1,65 @@
+# Optimized Dockerfile for Railway deployment (memory-constrained environments)
+# This version uses minimal dependencies and is optimized for <1GB RAM deployments
+
+# Build stage - compile dependencies
+FROM python:3.11-slim as builder
+
+# Set working directory
+WORKDIR /app
+
+# Install minimal build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy minimal requirements
+COPY requirements-minimal.txt .
+
+# Install Python dependencies with optimizations
+RUN pip install --no-cache-dir --user -r requirements-minimal.txt
+
+# Production stage - minimal image
+FROM python:3.11-slim
+
+# Set working directory
+WORKDIR /app
+
+# Copy Python dependencies from builder
+COPY --from=builder /root/.local /root/.local
+
+# Make sure scripts in .local are usable
+ENV PATH=/root/.local/bin:$PATH
+
+# Copy application code
+COPY . .
+
+# Create directories for uploads (chroma_db not needed for minimal deployment)
+RUN mkdir -p uploads
+
+# Set environment variables for minimal deployment
+ENV ENVIRONMENT=production
+ENV DISABLE_LOCAL_EMBEDDINGS=true
+ENV VERIFY_LLM_ON_STARTUP=false
+ENV AUTO_CREATE_TABLES=true
+ENV PYTHONUNBUFFERED=1
+
+# Expose port (Railway will set PORT env var)
+EXPOSE 8000
+
+# Use gunicorn with minimal configuration for memory-constrained environments
+# - Single worker (-w 1) to minimize memory usage
+# - Reduced timeout for faster failure detection
+# - Lower connection limits to reduce memory overhead
+# - Preload app to share memory across workers (if multiple workers used)
+CMD gunicorn app.main:app \
+    -w 1 \
+    -k uvicorn.workers.UvicornWorker \
+    -b 0.0.0.0:${PORT:-8000} \
+    --timeout 60 \
+    --max-requests 500 \
+    --max-requests-jitter 50 \
+    --worker-connections 100 \
+    --access-logfile - \
+    --error-logfile - \
+    --log-level info
