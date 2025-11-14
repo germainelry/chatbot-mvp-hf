@@ -12,6 +12,7 @@ from app.database import get_db
 from app.models import KnowledgeBase
 from app.services.rag_service import add_article_to_vector_db
 from app.middleware.auth import require_api_key
+from app.middleware.admin_auth import require_admin_auth
 
 router = APIRouter()
 
@@ -147,18 +148,42 @@ async def update_article(
 async def delete_article(
     article_id: int,
     db: Session = Depends(get_db),
-    api_key: str = Depends(require_api_key)
+    api_key: str = Depends(require_api_key),
+    admin: dict = Depends(require_admin_auth)
 ):
-    """Delete a knowledge base article."""
+    """
+    Delete a knowledge base article.
+
+    **ADMIN ONLY**: Requires both API key and admin authentication.
+
+    Security:
+    - Requires X-API-Key header for general authentication
+    - Requires X-Admin-Token header for admin authorization
+
+    To get admin token:
+    1. POST /api/admin/login with username/password
+    2. Use returned access_token as X-Admin-Token header
+    """
     article = db.query(KnowledgeBase).filter(
         KnowledgeBase.id == article_id
     ).first()
-    
+
     if not article:
         raise HTTPException(status_code=404, detail="Article not found")
-    
+
+    # Log the deletion for audit trail
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(
+        f"[ADMIN DELETE] Admin '{admin.get('sub')}' deleted knowledge base article {article_id} "
+        f"(title: '{article.title}')"
+    )
+
     db.delete(article)
     db.commit()
-    
-    return {"message": "Article deleted successfully"}
+
+    return {
+        "message": "Article deleted successfully",
+        "deleted_by": admin.get("sub")
+    }
 

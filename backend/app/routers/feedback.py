@@ -139,58 +139,7 @@ async def create_feedback(
     return db_feedback
 
 
-@router.get("", response_model=List[FeedbackResponse])
-async def get_all_feedback(
-    limit: int = 50,
-    db: Session = Depends(get_db)
-):
-    """Get recent feedback for analytics."""
-    feedback = db.query(Feedback).order_by(
-        Feedback.created_at.desc()
-    ).limit(limit).all()
-    
-    return feedback
-
-
-@router.get("/{feedback_id}", response_model=FeedbackResponse)
-async def get_feedback(
-    feedback_id: int,
-    db: Session = Depends(get_db)
-):
-    """Get specific feedback entry."""
-    feedback = db.query(Feedback).filter(Feedback.id == feedback_id).first()
-    
-    if not feedback:
-        raise HTTPException(status_code=404, detail="Feedback not found")
-    
-    return feedback
-
-
-@router.post("/retrain")
-async def trigger_retraining(
-    db: Session = Depends(get_db),
-    api_key: str = Depends(require_api_key)
-):
-    """
-    Manually trigger retraining pipeline.
-    Processes feedback and updates models.
-    """
-    from app.services.retraining_service import process_retraining
-    
-    results = process_retraining(db)
-    return results
-
-
-@router.get("/training-data/export")
-async def export_training_data(
-    limit: Optional[int] = None,
-    db: Session = Depends(get_db)
-):
-    """
-    Export training data in JSONL format.
-    """
-    from app.services.retraining_service import export_training_data_jsonl
-    
-    jsonl_data = export_training_data_jsonl(db, limit=limit)
-    return {"data": jsonl_data, "format": "jsonl"}
+# Note: GET /feedback, GET /feedback/{id}, POST /retrain, and GET /training-data/export
+# endpoints have been removed as they are not used by the frontend.
+# Frontend uses /analytics/feedback-history for feedback display.
 

@@ -24,6 +24,10 @@ psycopg2-binary>=2.9.0  # PostgreSQL
 pymysql>=1.1.0  # MySQL
 cryptography>=41.0.0  # Encrypt DB connections
 
+# Authentication
+PyJWT>=2.8.0  # JWT token handling
+bcrypt>=4.0.0  # Password hashing
+
 # Hugging Face (optional, for local inference)
 transformers>=4.35.0
 accelerate>=0.24.0  # Optional, for optimization

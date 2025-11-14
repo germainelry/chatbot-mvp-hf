@@ -210,45 +210,97 @@ async def test_llm_connection(
     test_request: LLMTestRequest,
     api_key: str = Depends(require_api_key)
 ):
-    """Test LLM connection with detailed error messages."""
+    """Test LLM connection with detailed error messages and model information."""
     import logging
     logger = logging.getLogger(__name__)
     
-    provider = get_provider(test_request.provider, {
+    logger.info(
+        f"[LLM Test] Testing connection - Provider: {test_request.provider}, "
+        f"Model: {test_request.model}"
+    )
+    
+    provider_config = {
         "model": test_request.model,
         **(test_request.config or {})
-    })
+    }
+    
+    provider = get_provider(test_request.provider, provider_config)
     
     if not provider:
+        logger.warning(
+            f"[LLM Test] Provider not available - Provider: {test_request.provider}, "
+            f"Model: {test_request.model}"
+        )
         raise HTTPException(status_code=400, detail=f"Provider {test_request.provider} not available")
+    
+    # Get actual model being used
+    actual_model = test_request.model
+    if hasattr(provider, 'get_active_model'):
+        try:
+            actual_model = provider.get_active_model()
+        except:
+            pass
+    elif hasattr(provider, 'model'):
+        actual_model = getattr(provider, 'model', test_request.model)
+    elif hasattr(provider, 'model_name'):
+        actual_model = getattr(provider, 'model_name', test_request.model)
     
     # Check availability
     if hasattr(provider, 'get_availability_info'):
         available, message = provider.get_availability_info()
         if not available:
+            logger.warning(
+                f"[LLM Test] Provider not available - Provider: {test_request.provider}, "
+                f"Model: {test_request.model}, Message: {message}"
+            )
             raise HTTPException(status_code=400, detail=message)
     elif not provider.is_available():
+        logger.warning(
+            f"[LLM Test] Provider not available - Provider: {test_request.provider}, "
+            f"Model: {test_request.model}"
+        )
         raise HTTPException(status_code=400, detail=f"Provider {test_request.provider} is not available")
     
     try:
         # Test with a simple prompt
-        logger.info(f"Testing LLM connection: provider={test_request.provider}, model={test_request.model}")
+        logger.info(
+            f"[LLM Test] Generating test response - Provider: {test_request.provider}, "
+            f"Model: {actual_model}"
+        )
         response = await provider.generate_response(
             prompt="Say 'Hello, world!'",
             system_prompt="You are a helpful assistant."
         )
-        logger.info(f"LLM connection test successful for {test_request.model}")
+        
+        response_preview = response[:100] if response else ""
+        logger.info(
+            f"[LLM Test] Test successful - Provider: {test_request.provider}, "
+            f"Model: {actual_model}, Response Length: {len(response) if response else 0}"
+        )
+        
         return {
             "success": True,
-            "message": f"Connection successful to {test_request.model}",
-            "test_response": response[:100]  # First 100 chars
+            "message": f"Connection successful to {actual_model}",
+            "test_response": response_preview,
+            "provider": test_request.provider,
+            "configured_model": test_request.model,
+            "actual_model_used": actual_model,
+            "model_match": (actual_model == test_request.model),
+            "response_length": len(response) if response else 0
         }
     except Exception as e:
         error_msg = str(e)
         error_type = type(e).__name__
-        logger.error(f"LLM connection test failed: provider={test_request.provider}, model={test_request.model}, error={error_type}: {error_msg}")
+        logger.error(
+            f"[LLM Test] Test failed - Provider: {test_request.provider}, "
+            f"Model: {actual_model}, Error Type: {error_type}, Error: {error_msg}",
+            exc_info=True
+        )
         # Return the full error message (already formatted by the provider)
-        raise HTTPException(status_code=500, detail=error_msg)
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Model {actual_model}: {error_msg}"
+        )
 
 
 @router.get("/embedding-models")
@@ -333,36 +385,5 @@ async def get_llm_provider_info(provider: str):
     return metadata
 
 
-@router.get("/available-models/{provider}")
-async def get_available_models(provider: str):
-    """Get list of available models for a provider."""
-    from app.services.llm_providers.factory import (
-        get_provider_metadata,
-        list_available_providers,
-    )
-
-    # Check if provider exists in available providers
-    available_providers = list_available_providers()
-    if provider.lower() not in [p.lower() for p in available_providers]:
-        # Return empty data instead of 404 to avoid error logs
-        return {
-            "provider": provider,
-            "models": []
-        }
-    
-    metadata = get_provider_metadata(provider)
-    if not metadata:
-        # Return empty data if metadata not found
-        return {
-            "provider": provider,
-            "models": []
-        }
-    
-    # Return models list (no distinction between free/paid)
-    models = metadata.get("paid_models", [])
-    
-    return {
-        "provider": provider,
-        "models": models
-    }
+# Note: GET /available-models/{provider} endpoint removed as duplicate of /llm-models/{provider}
 

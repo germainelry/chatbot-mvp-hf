@@ -3,9 +3,12 @@ Anthropic Claude LLM Provider implementation.
 Supports Claude models via Anthropic API.
 """
 import os
+import logging
 from typing import Dict, Optional
 
 from app.services.llm_providers.base import LLMProvider
+
+logger = logging.getLogger(__name__)
 
 # Anthropic will be optional - fallback if not available
 ANTHROPIC_AVAILABLE = False
@@ -58,7 +61,14 @@ class AnthropicProvider(LLMProvider):
         model = merged_config.get("model", self.model)
         system_prompt = system_prompt or merged_config.get("system_prompt", "You are a helpful assistant.")
         
+        logger.info(
+            f"[Anthropic] Generating response - Model: {model}, "
+            f"Prompt Length: {len(prompt)}, Has System Prompt: {bool(system_prompt)}"
+        )
+        
         try:
+            logger.debug(f"[Anthropic] Calling API - Model: {model}")
+            
             response = self.client.messages.create(
                 model=model,
                 max_tokens=merged_config.get("max_tokens", 1024),
@@ -70,11 +80,17 @@ class AnthropicProvider(LLMProvider):
             )
             
             # Extract text from response
+            response_text = ""
             if response.content and len(response.content) > 0:
-                return response.content[0].text
-            return ""
+                response_text = response.content[0].text
+            
+            logger.info(f"[Anthropic] Generation successful - Model: {model}, Response Length: {len(response_text)}")
+            
+            return response_text
         except Exception as e:
-            raise Exception(f"Anthropic generation failed: {e}")
+            error_msg = f"Anthropic generation failed for model {model}: {e}"
+            logger.error(f"[Anthropic] {error_msg}", exc_info=True)
+            raise Exception(error_msg)
     
     def is_available(self) -> bool:
         """
@@ -93,6 +109,15 @@ class AnthropicProvider(LLMProvider):
     
     def get_provider_name(self) -> str:
         return "anthropic"
+    
+    def get_active_model(self) -> str:
+        """
+        Get the model currently being used by this provider.
+        
+        Returns:
+            Model name string
+        """
+        return self.model
     
     def get_default_config(self) -> Dict:
         return {

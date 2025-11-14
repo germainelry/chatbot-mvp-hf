@@ -3,6 +3,7 @@ LLM service with provider abstraction and tenant-aware configuration.
 Implements confidence scoring for Human-in-the-Loop workflow.
 """
 import os
+import logging
 from typing import Dict, List, Optional
 from sqlalchemy.orm import Session
 
@@ -11,6 +12,8 @@ from app.services.rag_service import search_knowledge_base_vector
 from app.services.llm_providers.factory import get_provider
 from app.services.llm_providers.encryption import decrypt_llm_config
 from app.config import get_default_llm_config, get_tone_prompt
+
+logger = logging.getLogger(__name__)
 
 # Keep for backward compatibility
 OLLAMA_AVAILABLE = False
@@ -87,6 +90,8 @@ async def generate_ai_response(
     
     # Get configuration (tenant config > env vars > defaults)
     default_config = get_default_llm_config()
+    config_source = "database" if tenant_config else "defaults"
+    
     if tenant_config:
         llm_provider = tenant_config.llm_provider or default_config["provider"]
         llm_model = tenant_config.llm_model_name or default_config["model"]
@@ -102,6 +107,13 @@ async def generate_ai_response(
         tone = default_config["tone"]
         auto_send_threshold = default_config["auto_send_threshold"]
         embedding_model_name = default_config.get("embedding_model")
+    
+    # Log configuration details
+    logger.info(
+        f"[LLM Service] Starting generation - Provider: {llm_provider}, "
+        f"Model: {llm_model}, Config Source: {config_source}, "
+        f"Conversation ID: {conversation_id}"
+    )
     
     # Search knowledge base with tenant's embedding model
     matched_articles = search_knowledge_base(user_message, db, tenant_id=None, embedding_model_name=embedding_model_name)
@@ -121,12 +133,49 @@ async def generate_ai_response(
         "model": llm_model,
         **llm_config
     }
+    
+    # Determine final model name from merged config
+    final_model = provider_config.get("model", llm_model)
+    
+    logger.info(
+        f"[LLM Service] Creating provider - Provider: {llm_provider}, "
+        f"Model: {final_model}, Provider Config Keys: {list(provider_config.keys())}"
+    )
+    
     provider = get_provider(llm_provider, provider_config)
+    
+    # Log provider creation status
+    if provider:
+        provider_available = provider.is_available()
+        # Try to get the model the provider is actually using
+        provider_model = final_model
+        if hasattr(provider, 'model'):
+            provider_model = getattr(provider, 'model', final_model)
+        elif hasattr(provider, 'model_name'):
+            provider_model = getattr(provider, 'model_name', final_model)
+        
+        logger.info(
+            f"[LLM Service] Provider created - Provider: {llm_provider}, "
+            f"Available: {provider_available}, Provider Model: {provider_model}"
+        )
+    else:
+        logger.warning(
+            f"[LLM Service] Provider creation failed - Provider: {llm_provider}, "
+            f"Model: {final_model}"
+        )
     
     # Generate response
     reasoning = f"Generated using {llm_provider} LLM"
+    actual_model_used = final_model
+    model_validation_status = "unknown"
+    
     if provider and provider.is_available():
         try:
+            logger.info(
+                f"[LLM Service] Generating response - Provider: {llm_provider}, "
+                f"Model: {final_model}, Provider Type: {type(provider).__name__}"
+            )
+            
             # Build system prompt with tone
             system_prompt = get_tone_prompt(tone)
             system_prompt += "\n\nUse the following information to answer the customer's question. If the information provided doesn't fully answer the question, acknowledge this and offer to escalate to a human agent."
@@ -139,14 +188,43 @@ async def generate_ai_response(
                 system_prompt=system_prompt,
                 config=provider_config
             )
+            
+            # Try to get actual model used from provider
+            if hasattr(provider, 'get_active_model'):
+                try:
+                    actual_model_used = provider.get_active_model()
+                except:
+                    pass
+            elif hasattr(provider, 'model'):
+                actual_model_used = getattr(provider, 'model', final_model)
+            elif hasattr(provider, 'model_name'):
+                actual_model_used = getattr(provider, 'model_name', final_model)
+            
+            model_validation_status = "success"
+            response_length = len(response) if response else 0
+            
+            logger.info(
+                f"[LLM Service] Generation successful - Provider: {llm_provider}, "
+                f"Model: {actual_model_used}, Response Length: {response_length}"
+            )
         except Exception as e:
-            print(f"LLM provider {llm_provider} failed: {e}, using fallback")
+            logger.error(
+                f"[LLM Service] Generation failed - Provider: {llm_provider}, "
+                f"Model: {final_model}, Error: {str(e)}",
+                exc_info=True
+            )
             response = generate_fallback_response(user_message, matched_articles)
-            reasoning = f"Fallback (provider {llm_provider} failed)"
+            reasoning = f"Fallback (provider {llm_provider} failed: {str(e)})"
+            model_validation_status = "failed"
     else:
         # Fallback to rule-based responses
+        logger.warning(
+            f"[LLM Service] Provider unavailable, using fallback - Provider: {llm_provider}, "
+            f"Model: {final_model}"
+        )
         response = generate_fallback_response(user_message, matched_articles)
         reasoning = f"Fallback (provider {llm_provider} unavailable)"
+        model_validation_status = "unavailable"
     
     return {
         "response": response,
@@ -156,7 +234,9 @@ async def generate_ai_response(
         "auto_send_threshold": auto_send_threshold,
         "should_auto_send": confidence >= auto_send_threshold,
         "llm_provider": llm_provider,
-        "llm_model": llm_model
+        "llm_model": llm_model,
+        "actual_model_used": actual_model_used,
+        "model_validation_status": model_validation_status
     }
 
 

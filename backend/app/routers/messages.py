@@ -8,6 +8,7 @@ from typing import Optional
 from app.database import get_db
 from app.models import Conversation, Message, MessageType
 from app.middleware.auth import require_api_key
+from app.middleware.admin_auth import require_admin_auth
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -78,20 +79,6 @@ async def create_message(
     db.refresh(db_message)
     
     return db_message
-
-
-@router.get("/{message_id}", response_model=MessageResponse)
-async def get_message(
-    message_id: int,
-    db: Session = Depends(get_db)
-):
-    """Get a specific message by ID."""
-    message = db.query(Message).filter(Message.id == message_id).first()
-    
-    if not message:
-        raise HTTPException(status_code=404, detail="Message not found")
-    
-    return message
 
 
 class MessageUpdate(BaseModel):
@@ -179,6 +166,64 @@ async def update_message(
         except Exception as e:
             # Don't fail message update if evaluation calculation fails
             print(f"Failed to calculate evaluation metrics for edited message: {e}")
-    
+
     return message
+
+
+@router.delete("/{message_id}")
+async def delete_message(
+    message_id: int,
+    db: Session = Depends(get_db),
+    api_key: str = Depends(require_api_key),
+    admin: dict = Depends(require_admin_auth)
+):
+    """
+    Delete a message from a conversation.
+
+    **ADMIN ONLY**: Requires both API key and admin authentication.
+
+    Security:
+    - Requires X-API-Key header for general authentication
+    - Requires X-Admin-Token header for admin authorization
+    - Only allows deletion of non-customer messages for safety
+
+    To get admin token:
+    1. POST /api/admin/login with username/password
+    2. Use returned access_token as X-Admin-Token header
+    """
+    message = db.query(Message).filter(Message.id == message_id).first()
+
+    if not message:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    # Safety check: prevent deletion of customer messages
+    if message.message_type == MessageType.CUSTOMER:
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot delete customer messages. Only AI-generated or agent messages can be deleted."
+        )
+
+    # Update conversation timestamp
+    conversation = db.query(Conversation).filter(
+        Conversation.id == message.conversation_id
+    ).first()
+    if conversation:
+        conversation.updated_at = datetime.utcnow()
+
+    # Log the deletion for audit trail
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(
+        f"[ADMIN DELETE] Admin '{admin.get('sub')}' deleted message {message_id} "
+        f"in conversation {message.conversation_id}"
+    )
+
+    db.delete(message)
+    db.commit()
+
+    return {
+        "message": "Message deleted successfully",
+        "message_id": message_id,
+        "deleted_by": admin.get("sub")
+    }
 

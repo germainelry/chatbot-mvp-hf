@@ -2,10 +2,13 @@
 LLM Provider Factory.
 Creates and manages LLM provider instances.
 """
+import logging
 from typing import TYPE_CHECKING, Dict, Optional
 
 if TYPE_CHECKING:
     from app.services.llm_providers.base import LLMProvider
+
+logger = logging.getLogger(__name__)
 
 # Registry of available providers - lazy loaded to avoid circular imports
 _PROVIDER_REGISTRY: Dict[str, type] = {}
@@ -18,7 +21,7 @@ PROVIDER_METADATA = {
     "huggingface_inference": {
         "display_name": "HuggingFace Inference API",
         "description": "Serverless inference API for open-source models. One API key works for all models.",
-        "cost": "Free tier available ($0.10/month credits)",
+        "cost": "Free: $0.10/month credits; Pro: $2.00/month credits",
         "environments": ["cloud", "local"],
         "requires_api_key": True,
         "setup_complexity": "easy",
@@ -134,16 +137,57 @@ def get_provider(provider_name: str, config: Optional[Dict] = None) -> Optional[
         LLMProvider instance or None if provider not found
     """
     _load_providers()
-    provider_class = _PROVIDER_REGISTRY.get(provider_name.lower())
+    provider_name_lower = provider_name.lower()
+    provider_class = _PROVIDER_REGISTRY.get(provider_name_lower)
+    
+    # Extract model name from config for logging
+    model_name = None
+    if config:
+        model_name = config.get("model")
+    
+    logger.info(
+        f"[Provider Factory] Creating provider - Provider: {provider_name}, "
+        f"Model: {model_name}, Config Keys: {list(config.keys()) if config else []}"
+    )
     
     if not provider_class:
+        logger.warning(
+            f"[Provider Factory] Provider not found in registry - Provider: {provider_name}, "
+            f"Available Providers: {list(_PROVIDER_REGISTRY.keys())}"
+        )
         return None
     
     try:
         provider = provider_class(config or {})
-        return provider if provider.is_available() else None
+        
+        # Check availability
+        is_available = provider.is_available()
+        
+        # Try to get the model the provider is using
+        provider_model = model_name
+        if hasattr(provider, 'model'):
+            provider_model = getattr(provider, 'model', model_name)
+        elif hasattr(provider, 'model_name'):
+            provider_model = getattr(provider, 'model_name', model_name)
+        
+        if is_available:
+            logger.info(
+                f"[Provider Factory] Provider created successfully - Provider: {provider_name}, "
+                f"Model: {provider_model}, Available: True"
+            )
+            return provider
+        else:
+            logger.warning(
+                f"[Provider Factory] Provider created but not available - Provider: {provider_name}, "
+                f"Model: {provider_model}, Available: False"
+            )
+            return None
     except Exception as e:
-        print(f"Error initializing provider {provider_name}: {e}")
+        logger.error(
+            f"[Provider Factory] Error initializing provider - Provider: {provider_name}, "
+            f"Model: {model_name}, Error: {str(e)}",
+            exc_info=True
+        )
         return None
 
 

@@ -3,9 +3,12 @@ OpenAI LLM Provider implementation.
 Supports GPT-4, GPT-3.5, and other OpenAI models via API.
 """
 import os
+import logging
 from typing import Dict, Optional
 
 from app.services.llm_providers.base import LLMProvider
+
+logger = logging.getLogger(__name__)
 
 # OpenAI will be optional - fallback if not available
 OPENAI_AVAILABLE = False
@@ -63,11 +66,18 @@ class OpenAIProvider(LLMProvider):
         model = merged_config.get("model", self.model)
         system_prompt = system_prompt or merged_config.get("system_prompt", "You are a helpful assistant.")
         
+        logger.info(
+            f"[OpenAI] Generating response - Model: {model}, "
+            f"Prompt Length: {len(prompt)}, Has System Prompt: {bool(system_prompt)}"
+        )
+        
         try:
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
             messages.append({"role": "user", "content": prompt})
+            
+            logger.debug(f"[OpenAI] Calling API - Model: {model}, Messages: {len(messages)}")
             
             response = self.client.chat.completions.create(
                 model=model,
@@ -76,9 +86,14 @@ class OpenAIProvider(LLMProvider):
                 max_tokens=merged_config.get("max_tokens", 1000)
             )
             
-            return response.choices[0].message.content
+            response_text = response.choices[0].message.content
+            logger.info(f"[OpenAI] Generation successful - Model: {model}, Response Length: {len(response_text) if response_text else 0}")
+            
+            return response_text
         except Exception as e:
-            raise Exception(f"OpenAI generation failed: {e}")
+            error_msg = f"OpenAI generation failed for model {model}: {e}"
+            logger.error(f"[OpenAI] {error_msg}", exc_info=True)
+            raise Exception(error_msg)
     
     def is_available(self) -> bool:
         """
@@ -102,6 +117,15 @@ class OpenAIProvider(LLMProvider):
     
     def get_provider_name(self) -> str:
         return "openai"
+    
+    def get_active_model(self) -> str:
+        """
+        Get the model currently being used by this provider.
+        
+        Returns:
+            Model name string
+        """
+        return self.model
     
     def get_default_config(self) -> Dict:
         return {

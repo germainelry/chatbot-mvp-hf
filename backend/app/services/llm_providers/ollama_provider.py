@@ -3,9 +3,12 @@ Ollama LLM Provider implementation.
 Supports local Ollama models (Llama, Mistral, etc.)
 """
 import os
+import logging
 from typing import Dict, Optional
 
 from app.services.llm_providers.base import LLMProvider
+
+logger = logging.getLogger(__name__)
 
 # Ollama will be optional - fallback if not available
 OLLAMA_AVAILABLE = False
@@ -58,7 +61,15 @@ class OllamaProvider(LLMProvider):
         model = merged_config.get("model", self.model)
         system_prompt = system_prompt or merged_config.get("system_prompt", "You are a helpful assistant.")
         
+        logger.info(
+            f"[Ollama] Generating response - Model: {model}, "
+            f"Base URL: {self.base_url}, Prompt Length: {len(prompt)}, "
+            f"Has System Prompt: {bool(system_prompt)}"
+        )
+        
         try:
+            logger.debug(f"[Ollama] Calling API - Model: {model}, Base URL: {self.base_url}")
+            
             # Use the base_url if configured
             if self.base_url and self.base_url != "http://localhost:11434":
                 client = ollama.Client(host=self.base_url)
@@ -78,9 +89,14 @@ class OllamaProvider(LLMProvider):
                     ]
                 )
             
-            return response['message']['content']
+            response_text = response['message']['content']
+            logger.info(f"[Ollama] Generation successful - Model: {model}, Response Length: {len(response_text) if response_text else 0}")
+            
+            return response_text
         except Exception as e:
-            raise Exception(f"Ollama generation failed: {e}")
+            error_msg = f"Ollama generation failed for model {model}: {e}"
+            logger.error(f"[Ollama] {error_msg}", exc_info=True)
+            raise Exception(error_msg)
     
     def is_available(self) -> bool:
         """
@@ -136,6 +152,15 @@ class OllamaProvider(LLMProvider):
     
     def get_provider_name(self) -> str:
         return "ollama"
+    
+    def get_active_model(self) -> str:
+        """
+        Get the model currently being used by this provider.
+        
+        Returns:
+            Model name string
+        """
+        return self.model
     
     def get_default_config(self) -> Dict:
         return {

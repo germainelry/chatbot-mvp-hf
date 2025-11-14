@@ -9,6 +9,8 @@ from typing import Dict, Optional
 
 from app.services.llm_providers.base import LLMProvider
 
+logger = logging.getLogger(__name__)
+
 # HuggingFace Inference API will be optional
 HF_INFERENCE_AVAILABLE = False
 try:
@@ -90,6 +92,11 @@ class HuggingFaceInferenceProvider(LLMProvider):
         model = merged_config.get("model", self.model)
         system_prompt = system_prompt or merged_config.get("system_prompt", "You are a helpful assistant.")
         
+        logger.info(
+            f"[HuggingFace Inference] Generating response - Model: {model}, "
+            f"Prompt Length: {len(prompt)}, Has System Prompt: {bool(system_prompt)}"
+        )
+        
         # Get API key from merged config (may override instance-level key)
         api_key = merged_config.get("api_key") or self.api_key
         if not api_key:
@@ -104,19 +111,23 @@ class HuggingFaceInferenceProvider(LLMProvider):
                     client_kwargs["base_url"] = self.base_url
                 self.client = InferenceClient(**client_kwargs)
                 self.api_key = api_key
+                logger.info(f"[HuggingFace Inference] Client re-initialized with new API key")
             except Exception as e:
-                print(f"Error re-initializing HuggingFace Inference client: {e}")
+                logger.error(f"[HuggingFace Inference] Error re-initializing client: {e}")
         
         # Require API key for HuggingFace Inference API
         if not api_key:
-            raise Exception(
+            error_msg = (
                 "HuggingFace API key is required. "
                 "Get a free token at https://huggingface.co/settings/tokens "
                 "(free tier: $0.10/month credits, PRO: $2.00/month credits)"
             )
+            logger.error(f"[HuggingFace Inference] API key missing for model: {model}")
+            raise Exception(error_msg)
         
         # Determine if this is an instruction-tuned model
         is_instruction = self._is_instruction_model(model)
+        logger.debug(f"[HuggingFace Inference] Model type - Model: {model}, Is Instruction: {is_instruction}")
         
         try:
             # For instruction-tuned models, try chat_completion API first
@@ -216,8 +227,7 @@ class HuggingFaceInferenceProvider(LLMProvider):
             error_type = type(e).__name__
             
             # Log the full original error for debugging
-            logger = logging.getLogger(__name__)
-            logger.error(f"HuggingFace Inference API error for model {model}: {error_type}: {error_msg}")
+            logger.error(f"[HuggingFace Inference] API error - Model: {model}, Error Type: {error_type}, Error: {error_msg}")
             
             # Provide helpful error messages with actual error details
             # Check for specific error patterns first
@@ -261,6 +271,15 @@ class HuggingFaceInferenceProvider(LLMProvider):
     
     def get_provider_name(self) -> str:
         return "huggingface_inference"
+    
+    def get_active_model(self) -> str:
+        """
+        Get the model currently being used by this provider.
+        
+        Returns:
+            Model name string
+        """
+        return self.model
     
     def get_default_config(self) -> Dict:
         return {
