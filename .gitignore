@@ -114,3 +114,4 @@ INTERVIEW*.md
 
 backend/chroma_db/
 !backend/chroma_db/.gitkeep
+.claude/settings.local.json

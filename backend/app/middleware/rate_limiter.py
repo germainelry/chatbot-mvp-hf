@@ -1,6 +1,6 @@
 """
 Rate limiting middleware using slowapi.
-Implements per-IP and per-tenant rate limiting for demo mode.
+Implements per-IP and per-tenant rate limiting.
 """
 import os
 from typing import Callable

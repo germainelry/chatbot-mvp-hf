@@ -7,7 +7,6 @@ import os
 
 from app.database import init_db
 from app.middleware.auth import check_api_key_for_docs
-from app.middleware.demo_mode import DemoModeMiddleware
 from app.middleware.rate_limiter import RateLimitMiddleware
 from app.routers import (
     admin_auth,
@@ -212,11 +211,8 @@ class CORSResponseMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(CORSResponseMiddleware)
 
-# Rate limiting middleware (applied before demo mode)
+# Rate limiting middleware
 app.add_middleware(RateLimitMiddleware)
-
-# Demo mode restrictions middleware
-app.add_middleware(DemoModeMiddleware)
 
 # Include routers
 app.include_router(admin_auth.router, prefix="/api/admin", tags=["Admin Authentication"])

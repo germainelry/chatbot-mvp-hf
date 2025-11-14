@@ -3,7 +3,6 @@ import { MessageSquare, BarChart3, Users, BookOpen, Settings } from 'lucide-reac
 import { Button } from './components/ui/button';
 import { Separator } from './components/ui/separator';
 import { lazy, Suspense, useEffect } from 'react';
-import DemoBanner from './components/DemoBanner';
 import { cn } from './components/ui/utils';
 import { getTheme, applyTheme } from './config/theme';
 import { Toaster } from 'sonner';
@@ -90,7 +89,6 @@ function App() {
       <div className="min-h-screen bg-background">
         <Navigation />
         <main className="container py-6">
-          <DemoBanner />
           <Suspense fallback={<PageLoader />}>
             <Routes>
               <Route path="/" element={<CustomerChat />} />
