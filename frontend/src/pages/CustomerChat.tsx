@@ -39,23 +39,22 @@ export default function CustomerChat() {
       localStorage.setItem('customer_id', storedCustomerId);
     }
     setCustomerId(storedCustomerId);
-    
+
     // Always load conversation history on mount (but don't auto-load conversation)
     loadConversationHistory(storedCustomerId, false).then(() => {
       // After history is loaded, restore last viewed conversation ID from localStorage
-      const lastConversationId = localStorage.getItem('last_conversation_id');
+      // Verify the conversation_id is for this specific customer to prevent mixing
+      const lastConversationId = localStorage.getItem(`last_conversation_id_${storedCustomerId}`);
       if (lastConversationId) {
         const convId = parseInt(lastConversationId, 10);
         if (!isNaN(convId)) {
           setConversationId(convId);
-          // Load messages for restored conversation (with a small delay to ensure customerId is set)
-          setTimeout(() => {
-            loadConversation(convId);
-          }, 100);
+          // Load messages for restored conversation
+          loadConversation(convId);
         }
       }
     });
-    
+
     // Apply theme
     const theme = getTheme();
     if (theme) {
@@ -146,19 +145,19 @@ export default function CustomerChat() {
     if (loadingMessagesRef.current) {
       return;
     }
-    
+
     // Don't load if we're currently sending a message
     if (isSendingRef.current) {
       return;
     }
-    
+
     // Don't load if we don't have a customer ID yet
     if (!customerId) {
       return;
     }
-    
+
     loadingMessagesRef.current = true;
-    
+
     try {
       const msgs = await getConversationMessages(convId);
       // Only update if we're still on the same conversation (prevent race conditions)
@@ -167,8 +166,8 @@ export default function CustomerChat() {
       if (convId === currentConvId || currentConvId === null) {
         setMessages(msgs);
         setConversationId(convId);
-        // Store last viewed conversation in localStorage for persistence
-        localStorage.setItem('last_conversation_id', convId.toString());
+        // Store last viewed conversation in localStorage with customer-specific key
+        localStorage.setItem(`last_conversation_id_${customerId}`, convId.toString());
         setShowHistory(false);
       }
     } catch (error: any) {
@@ -176,7 +175,9 @@ export default function CustomerChat() {
       if (error.response?.status === 404) {
         console.error('Conversation not found. It may have been deleted.');
         // Clear invalid conversation ID from localStorage and state
-        localStorage.removeItem('last_conversation_id');
+        if (customerId) {
+          localStorage.removeItem(`last_conversation_id_${customerId}`);
+        }
         setConversationId(null);
         setMessages([]);
       } else if (error.message === 'Network Error' || error.code === 'ECONNREFUSED') {
@@ -191,8 +192,10 @@ export default function CustomerChat() {
     setConversationId(null);
     setMessages([]);
     setShowHistory(false);
-    // Clear last conversation from localStorage
-    localStorage.removeItem('last_conversation_id');
+    // Clear last conversation from localStorage with customer-specific key
+    if (customerId) {
+      localStorage.removeItem(`last_conversation_id_${customerId}`);
+    }
   };
 
   const handleSendMessage = async () => {
@@ -227,11 +230,11 @@ export default function CustomerChat() {
           const conversation = await createConversation(customerId);
           activeConversationId = conversation.id;
           setConversationId(activeConversationId);
-          // Store conversation ID in localStorage for persistence
-          localStorage.setItem('last_conversation_id', activeConversationId.toString());
+          // Store conversation ID in localStorage with customer-specific key
+          localStorage.setItem(`last_conversation_id_${customerId}`, activeConversationId.toString());
           // Update optimistic message with real conversation_id
-          setMessages(prev => prev.map(msg => 
-            msg.id === optimisticMessage.id 
+          setMessages(prev => prev.map(msg =>
+            msg.id === optimisticMessage.id
               ? { ...msg, conversation_id: activeConversationId! }
               : msg
           ));
@@ -246,6 +249,7 @@ export default function CustomerChat() {
           setMessages(prev => prev.filter(msg => msg.id !== optimisticMessage.id));
           setInputMessage(userMessageContent); // Restore input
           setIsLoading(false);
+          isSendingRef.current = false;
           return;
         }
       }
@@ -379,12 +383,12 @@ export default function CustomerChat() {
                       </div>
                     ) : (
                       <div className="space-y-2 pr-4">
-                        {conversationHistory.map((conv) => (
+                        {conversationHistory.map((conv, index) => (
                           <Card
                             key={conv.id}
                             className={cn(
-                              "cursor-pointer transition-all hover:shadow-md w-full",
-                              conv.id === conversationId && "ring-2 ring-primary"
+                              "cursor-pointer transition-all hover:shadow-lg hover:scale-[1.02] w-full",
+                              conv.id === conversationId && "ring-2 ring-primary shadow-lg scale-[1.02]"
                             )}
                             onClick={() => loadConversation(conv.id)}
                           >
@@ -393,14 +397,17 @@ export default function CustomerChat() {
                                 <div className="flex items-center gap-2 min-w-0 flex-1">
                                   <MessageSquare className="h-4 w-4 text-muted-foreground shrink-0" />
                                   <span className="text-sm font-medium">
-                                    Conversation #{conv.id}
+                                    Chat #{index + 1}
+                                  </span>
+                                  <span className="text-xs text-muted-foreground">
+                                    (ID: {conv.id})
                                   </span>
                                 </div>
                                 <Badge variant={getStatusBadgeVariant(conv.status)} className="shrink-0">
                                   {conv.status}
                                 </Badge>
                               </div>
-                              <p 
+                              <p
                                 className="text-xs text-muted-foreground mb-2 break-words"
                                 style={{
                                   display: '-webkit-box',
@@ -412,10 +419,11 @@ export default function CustomerChat() {
                               >
                                 {conv.last_message || 'No messages yet'}
                               </p>
-                              <p className="text-xs text-muted-foreground">
-                                {new Date(conv.created_at).toLocaleDateString()} at{' '}
-                                {new Date(conv.created_at).toLocaleTimeString()}
-                              </p>
+                              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                <span>{new Date(conv.created_at).toLocaleDateString()}</span>
+                                <span>•</span>
+                                <span>{new Date(conv.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                              </div>
                             </CardContent>
                           </Card>
                         ))}

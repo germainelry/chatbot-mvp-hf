@@ -7,6 +7,7 @@ import { ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
 import { Card, CardContent } from './ui/card';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
+import { getLLMProviderInfo } from '../services/api';
 
 export interface ProviderMetadata {
   display_name: string;
@@ -39,13 +40,8 @@ export function LLMProviderGuide({ provider }: LLMProviderGuideProps) {
     const fetchProviderInfo = async () => {
       try {
         setLoading(true);
-        const response = await fetch(`/api/config/llm-provider-info/${provider}`);
-        if (response.ok) {
-          const data = await response.json();
-          setMetadata(data);
-        } else {
-          setMetadata(null);
-        }
+        const data = await getLLMProviderInfo(provider);
+        setMetadata(data);
       } catch (error) {
         console.error('Failed to fetch provider info:', error);
         setMetadata(null);
@@ -69,7 +65,7 @@ export function LLMProviderGuide({ provider }: LLMProviderGuideProps) {
         <div className="space-y-4">
           {/* Cost Badge */}
           <div className="flex flex-wrap gap-2">
-            <Badge variant={isFree ? 'default' : 'outline'}>
+            <Badge variant={isFree ? 'default' : 'outline'} className={isFree ? 'hover:bg-primary' : ''}>
               {metadata.cost}
             </Badge>
           </div>

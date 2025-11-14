@@ -215,6 +215,22 @@ export const updateMessage = async (
   return response.data;
 };
 
+export const deleteMessage = async (messageId: number): Promise<{ message: string; message_id: number }> => {
+  // Get admin token from localStorage
+  const adminToken = localStorage.getItem('admin_token');
+
+  if (!adminToken) {
+    throw new Error('Admin authentication required. Please login as admin to delete messages.');
+  }
+
+  const response = await api.delete(`/messages/${messageId}`, {
+    headers: {
+      'X-Admin-Token': adminToken
+    }
+  });
+  return response.data;
+};
+
 // AI
 export const generateAIResponse = async (
   conversationId: number,
@@ -264,7 +280,18 @@ export const updateKnowledgeArticle = async (
 };
 
 export const deleteKnowledgeArticle = async (id: number): Promise<void> => {
-  await api.delete(`/knowledge-base/${id}`);
+  // Get admin token from localStorage
+  const adminToken = localStorage.getItem('admin_token');
+
+  if (!adminToken) {
+    throw new Error('Admin authentication required. Please login as admin to delete articles.');
+  }
+
+  await api.delete(`/knowledge-base/${id}`, {
+    headers: {
+      'X-Admin-Token': adminToken
+    }
+  });
 };
 
 // Analytics
